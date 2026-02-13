@@ -1,0 +1,109 @@
+data_sources:
+  egeria_python_path: /home/dwolfson/localGit/egeria-v6/egeria-python
+  include_patterns:
+    - "*.py"
+    - "*.md"
+  exclude_patterns:
+    - "**/__pycache__/**"
+    - "**/deprecated/**"
+    - "**/.git/**"
+    - "**/.venv/**"
+    - "**/node_modules/**"
+
+vector_store:
+  host: localhost
+  port: 19530
+  collections:
+    - code_snippets
+    - examples
+    - documentation
+    - api_signatures
+
+llm:
+  provider: ollama
+  base_url: http://localhost:11434
+  models:
+    query: llama3.1:8b          # Fast model for queries
+    code: codellama:13b          # Code-specialized model
+    conversation: llama3.1:8b    # General conversation
+    maintenance: codellama:13b   # Code analysis
+  parameters:
+    temperature: 0.7
+    max_tokens: 2000
+    top_p: 0.9
+    top_k: 40
+    repeat_penalty: 1.1
+    timeout: 60
+  model_overrides:
+    code:
+      temperature: 0.5
+      max_tokens: 3000
+    maintenance:
+      temperature: 0.4
+      max_tokens: 3000
+
+embeddings:
+  model: sentence-transformers/all-MiniLM-L6-v2
+  device: cpu
+  batch_size: 32
+  normalize: true
+  max_length: 512
+
+rag:
+  chunk_size: 512
+  chunk_overlap: 50
+  top_k: 5
+  similarity_threshold: 0.7
+  rerank: false
+  max_context_length: 4000
+
+agents:
+  query_agent:
+    enabled: true
+    model: llama3.1:8b
+    temperature: 0.3
+    max_iterations: 3
+  code_agent:
+    enabled: true
+    model: codellama:13b
+    temperature: 0.5
+    max_iterations: 5
+  conversation_agent:
+    enabled: true
+    model: llama3.1:8b
+    temperature: 0.7
+    max_iterations: 10
+    memory_window: 10
+  maintenance_agent:
+    enabled: true
+    model: codellama:13b
+    temperature: 0.4
+    max_iterations: 5
+
+cli:
+  default_agent: auto
+  interactive_mode: true
+  output_format: rich
+  show_citations: true
+  show_confidence: true
+  max_response_length: 5000
+
+observability:
+  mlflow:
+    enabled: true
+    tracking_uri: http://localhost:5000
+    experiment_name: egeria-advisor
+    log_system_metrics: true
+    log_query_metrics: true
+    auto_log: true
+  phoenix:
+    enabled: false
+    collector_endpoint: http://localhost:6006
+    trace_all_queries: false
+
+logging:
+  level: INFO
+  format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+  file: logs/advisor.log
+  rotation: "10 MB"
+  retention: "1 week"
