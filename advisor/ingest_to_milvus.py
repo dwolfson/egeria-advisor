@@ -1,0 +1,376 @@
+"""
+Ingest data from Phase 2 cache into Milvus vector store.
+
+This script reads the JSON files created by the data preparation pipeline
+and populates Milvus collections with embeddings for semantic search.
+"""
+
+import json
+from pathlib import Path
+from typing import List, Dict, Any
+from loguru import logger
+import sys
+
+from advisor.config import settings
+from advisor.vector_store import get_vector_store
+from advisor.embeddings import get_embedding_generator
+from advisor.mlflow_tracking import track_operation
+
+
+class DataIngester:
+    """Ingest prepared data into Milvus."""
+    
+    def __init__(self, cache_dir: Path = None):
+        """
+        Initialize data ingester.
+        
+        Args:
+            cache_dir: Directory containing cached data files
+        """
+        self.cache_dir = cache_dir or Path(settings.advisor_cache_dir)
+        self.vector_store = get_vector_store()
+        self.embedding_generator = get_embedding_generator()
+        
+        logger.info(f"Initialized DataIngester with cache dir: {self.cache_dir}")
+    
+    def load_json_file(self, filename: str) -> List[Dict[str, Any]]:
+        """Load data from a JSON file."""
+        filepath = self.cache_dir / filename
+        
+        if not filepath.exists():
+            logger.error(f"File not found: {filepath}")
+            raise FileNotFoundError(f"Cache file not found: {filename}")
+        
+        logger.info(f"Loading {filename}...")
+        with open(filepath) as f:
+            data = json.load(f)
+        
+        logger.info(f"✓ Loaded {len(data)} items from {filename}")
+        return data
+    
+    def ingest_code_elements(self, drop_existing: bool = False) -> int:
+        """
+        Ingest code elements (functions, classes, methods) into Milvus.
+        
+        Args:
+            drop_existing: Drop existing collection if it exists
+            
+        Returns:
+            Number of entities inserted
+        """
+        collection_name = "code_elements"
+        logger.info(f"Ingesting code elements into {collection_name}")
+        
+        # Load data
+        code_elements = self.load_json_file("code_elements.json")
+        
+        # Track with MLflow
+        params = {
+            "collection": collection_name,
+            "num_items": len(code_elements),
+            "drop_existing": drop_existing,
+            "embedding_model": self.embedding_generator.model_name,
+            "embedding_device": self.embedding_generator.device
+        }
+        
+        with track_operation(f"ingest_{collection_name}", params=params) as tracker:
+            # Create collection
+            self.vector_store.create_collection(
+                collection_name,
+                description="Egeria Python code elements (functions, classes, methods)",
+                drop_if_exists=drop_existing
+            )
+            
+            # Prepare data for insertion
+            texts = []
+            ids = []
+            metadata = []
+            
+            for elem in code_elements:
+                # Create searchable text combining name, docstring, and signature
+                text_parts = [
+                    f"Name: {elem.get('name', '')}",
+                    f"Type: {elem.get('type', '')}",
+                ]
+                
+                if elem.get('docstring'):
+                    text_parts.append(f"Documentation: {elem['docstring']}")
+                
+                if elem.get('signature'):
+                    text_parts.append(f"Signature: {elem['signature']}")
+                
+                text = "\n".join(text_parts)
+                texts.append(text)
+                
+                # Use file path + name as ID
+                elem_id = f"{elem.get('file', 'unknown')}::{elem.get('name', 'unknown')}"
+                ids.append(elem_id)
+                
+                # Store metadata
+                meta = {
+                    "name": elem.get("name", ""),
+                    "type": elem.get("type", ""),
+                    "file": elem.get("file", ""),
+                    "line_number": elem.get("line_number", 0),
+                    "is_public": elem.get("is_public", False),
+                    "complexity": elem.get("complexity", 0)
+                }
+                metadata.append(meta)
+            
+            # Insert into Milvus
+            count = self.vector_store.insert_data(
+                collection_name,
+                texts=texts,
+                ids=ids,
+                metadata=metadata
+            )
+            
+            # Create index
+            logger.info("Creating index...")
+            self.vector_store.create_index(
+                collection_name,
+                index_type="IVF_FLAT",
+                metric_type="L2"
+            )
+            
+            # Log metrics
+            tracker.log_metrics({
+                "entities_inserted": count,
+                "embedding_dimension": self.embedding_generator.embedding_dim
+            })
+            
+            logger.info(f"✓ Ingested {count} code elements")
+            return count
+    
+    def ingest_documentation(self, drop_existing: bool = False) -> int:
+        """
+        Ingest documentation sections into Milvus.
+        
+        Args:
+            drop_existing: Drop existing collection if it exists
+            
+        Returns:
+            Number of entities inserted
+        """
+        collection_name = "documentation"
+        logger.info(f"Ingesting documentation into {collection_name}")
+        
+        # Load data
+        doc_sections = self.load_json_file("doc_sections.json")
+        
+        # Create collection
+        self.vector_store.create_collection(
+            collection_name,
+            description="Egeria Python documentation sections",
+            drop_if_exists=drop_existing
+        )
+        
+        # Prepare data for insertion
+        texts = []
+        ids = []
+        metadata = []
+        
+        for i, section in enumerate(doc_sections):
+            # Use section content as text
+            text = section.get("content", "")
+            if section.get("title"):
+                text = f"Title: {section['title']}\n\n{text}"
+            
+            texts.append(text)
+            
+            # Generate ID
+            section_id = f"doc_{i}_{section.get('file', 'unknown')}"
+            ids.append(section_id)
+            
+            # Store metadata
+            meta = {
+                "title": section.get("title", ""),
+                "file": section.get("file", ""),
+                "section_type": section.get("section_type", ""),
+                "level": section.get("level", 0),
+                "word_count": section.get("word_count", 0)
+            }
+            metadata.append(meta)
+        
+        # Insert into Milvus
+        count = self.vector_store.insert_data(
+            collection_name,
+            texts=texts,
+            ids=ids,
+            metadata=metadata
+        )
+        
+        # Create index
+        logger.info("Creating index...")
+        self.vector_store.create_index(
+            collection_name,
+            index_type="IVF_FLAT",
+            metric_type="L2"
+        )
+        
+        logger.info(f"✓ Ingested {count} documentation sections")
+        return count
+    
+    def ingest_examples(self, drop_existing: bool = False) -> int:
+        """
+        Ingest code examples into Milvus.
+        
+        Args:
+            drop_existing: Drop existing collection if it exists
+            
+        Returns:
+            Number of entities inserted
+        """
+        collection_name = "examples"
+        logger.info(f"Ingesting examples into {collection_name}")
+        
+        # Load data
+        examples = self.load_json_file("examples.json")
+        
+        # Create collection
+        self.vector_store.create_collection(
+            collection_name,
+            description="Egeria Python code examples",
+            drop_if_exists=drop_existing
+        )
+        
+        # Prepare data for insertion
+        texts = []
+        ids = []
+        metadata = []
+        
+        for i, example in enumerate(examples):
+            # Combine description and code
+            text_parts = []
+            
+            if example.get("description"):
+                text_parts.append(f"Description: {example['description']}")
+            
+            if example.get("code"):
+                text_parts.append(f"Code:\n{example['code']}")
+            
+            text = "\n\n".join(text_parts)
+            texts.append(text)
+            
+            # Generate ID
+            example_id = f"example_{i}_{example.get('file', 'unknown')}"
+            ids.append(example_id)
+            
+            # Store metadata
+            meta = {
+                "file": example.get("file", ""),
+                "example_type": example.get("example_type", ""),
+                "line_number": example.get("line_number", 0),
+                "language": example.get("language", "python")
+            }
+            metadata.append(meta)
+        
+        # Insert into Milvus
+        count = self.vector_store.insert_data(
+            collection_name,
+            texts=texts,
+            ids=ids,
+            metadata=metadata
+        )
+        
+        # Create index
+        logger.info("Creating index...")
+        self.vector_store.create_index(
+            collection_name,
+            index_type="IVF_FLAT",
+            metric_type="L2"
+        )
+        
+        logger.info(f"✓ Ingested {count} examples")
+        return count
+    
+    def ingest_all(self, drop_existing: bool = False) -> Dict[str, int]:
+        """
+        Ingest all data types into Milvus.
+        
+        Args:
+            drop_existing: Drop existing collections if they exist
+            
+        Returns:
+            Dictionary with counts for each collection
+        """
+        logger.info("=" * 80)
+        logger.info("Starting full data ingestion to Milvus")
+        logger.info("=" * 80)
+        
+        results = {}
+        
+        try:
+            # Ingest code elements
+            results["code_elements"] = self.ingest_code_elements(drop_existing)
+            
+            # Ingest documentation
+            results["documentation"] = self.ingest_documentation(drop_existing)
+            
+            # Ingest examples
+            results["examples"] = self.ingest_examples(drop_existing)
+            
+            logger.info("=" * 80)
+            logger.info("Ingestion Summary:")
+            for collection, count in results.items():
+                logger.info(f"  {collection}: {count:,} entities")
+            logger.info("=" * 80)
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Ingestion failed: {e}")
+            raise
+        finally:
+            self.vector_store.disconnect()
+
+
+def main():
+    """Main entry point for data ingestion."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Ingest data into Milvus")
+    parser.add_argument(
+        "--drop-existing",
+        action="store_true",
+        help="Drop existing collections before ingesting"
+    )
+    parser.add_argument(
+        "--collection",
+        choices=["code_elements", "documentation", "examples", "all"],
+        default="all",
+        help="Which collection(s) to ingest"
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        help="Path to cache directory (default: from config)"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        ingester = DataIngester(cache_dir=args.cache_dir)
+        
+        if args.collection == "all":
+            results = ingester.ingest_all(drop_existing=args.drop_existing)
+            logger.info("✅ All data ingested successfully!")
+        elif args.collection == "code_elements":
+            count = ingester.ingest_code_elements(drop_existing=args.drop_existing)
+            logger.info(f"✅ Ingested {count} code elements")
+        elif args.collection == "documentation":
+            count = ingester.ingest_documentation(drop_existing=args.drop_existing)
+            logger.info(f"✅ Ingested {count} documentation sections")
+        elif args.collection == "examples":
+            count = ingester.ingest_examples(drop_existing=args.drop_existing)
+            logger.info(f"✅ Ingested {count} examples")
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"❌ Ingestion failed: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

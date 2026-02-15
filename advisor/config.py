@@ -19,7 +19,7 @@ class VectorStoreConfig(BaseModel):
     """Vector store configuration."""
     host: str = "localhost"
     port: int = 19530
-    collections: list[str] = ["code_snippets", "examples", "documentation"]
+    collections: list[str] = ["code_elements", "examples", "documentation"]
 
 
 class LLMModelConfig(BaseModel):
@@ -58,14 +58,34 @@ class EmbeddingConfig(BaseModel):
     max_length: int = 512
 
 
+class RAGRetrievalConfig(BaseModel):
+    """RAG retrieval configuration."""
+    top_k: int = 5
+    min_score: float = 0.7
+    rerank: bool = False
+
+
+class RAGContextConfig(BaseModel):
+    """RAG context configuration."""
+    max_length: int = 4000
+    format_style: str = "detailed"
+    include_metadata: bool = True
+
+
+class RAGGenerationConfig(BaseModel):
+    """RAG generation configuration."""
+    temperature: float = 0.7
+    max_tokens: int = 2000
+    stream: bool = False
+
+
 class RAGConfig(BaseModel):
     """RAG system configuration."""
     chunk_size: int = 512
     chunk_overlap: int = 50
-    top_k: int = 5
-    similarity_threshold: float = 0.7
-    rerank: bool = False
-    max_context_length: int = 4000
+    retrieval: RAGRetrievalConfig = Field(default_factory=RAGRetrievalConfig)
+    context: RAGContextConfig = Field(default_factory=RAGContextConfig)
+    generation: RAGGenerationConfig = Field(default_factory=RAGGenerationConfig)
 
 
 class AgentConfig(BaseModel):
@@ -159,20 +179,20 @@ class LoggingConfig(BaseModel):
 
 class AdvisorSettings(BaseSettings):
     """Main settings loaded from environment and config file."""
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
     )
-    
+
     # Milvus
     milvus_host: str = Field(default="localhost", alias="MILVUS_HOST")
     milvus_port: int = Field(default=19530, alias="MILVUS_PORT")
     milvus_user: str = Field(default="", alias="MILVUS_USER")
     milvus_password: str = Field(default="", alias="MILVUS_PASSWORD")
-    
+
     # Egeria
     egeria_platform_url: str = Field(
         default="https://localhost:9443",
@@ -181,7 +201,7 @@ class AdvisorSettings(BaseSettings):
     egeria_view_server: str = Field(default="view-server", alias="EGERIA_VIEW_SERVER")
     egeria_user: str = Field(default="garygeeke", alias="EGERIA_USER")
     egeria_password: str = Field(default="secret", alias="EGERIA_PASSWORD")
-    
+
     # Ollama
     ollama_base_url: str = Field(
         default="http://localhost:11434",
@@ -190,14 +210,14 @@ class AdvisorSettings(BaseSettings):
     ollama_model: str = Field(default="llama3.1:8b", alias="OLLAMA_MODEL")
     ollama_code_model: str = Field(default="codellama:13b", alias="OLLAMA_CODE_MODEL")
     ollama_temperature: float = Field(default=0.7, alias="OLLAMA_TEMPERATURE")
-    
+
     # Embeddings
     embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2",
         alias="EMBEDDING_MODEL"
     )
     embedding_device: str = Field(default="cpu", alias="EMBEDDING_DEVICE")
-    
+
     # MLflow
     mlflow_tracking_uri: str = Field(
         default="http://localhost:5000",
@@ -208,14 +228,14 @@ class AdvisorSettings(BaseSettings):
         alias="MLFLOW_EXPERIMENT_NAME"
     )
     mlflow_enable_tracking: bool = Field(default=True, alias="MLFLOW_ENABLE_TRACKING")
-    
+
     # Phoenix
     phoenix_enable: bool = Field(default=False, alias="PHOENIX_ENABLE")
     phoenix_collector_endpoint: str = Field(
         default="http://localhost:6006",
         alias="PHOENIX_COLLECTOR_ENDPOINT"
     )
-    
+
     # Advisor
     advisor_data_path: Path = Field(alias="ADVISOR_DATA_PATH")
     advisor_cache_dir: Path = Field(
@@ -228,12 +248,12 @@ class AdvisorSettings(BaseSettings):
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """
     Load configuration from YAML file.
-    
+
     Parameters
     ----------
     config_path : Path, optional
         Path to configuration file. If None, uses default location.
-    
+
     Returns
     -------
     dict
@@ -241,14 +261,14 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """
     if config_path is None:
         config_path = Path("config/advisor.yaml")
-    
+
     if not config_path.exists():
         logger.warning(f"Config file not found: {config_path}, using defaults")
         return {}
-    
+
     with open(config_path) as f:
         config = yaml.safe_load(f)
-    
+
     logger.info(f"Loaded configuration from {config_path}")
     return config
 
@@ -256,19 +276,19 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
 def get_full_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """
     Get full configuration including all nested configs.
-    
+
     Parameters
     ----------
     config_path : Path, optional
         Path to configuration file
-    
+
     Returns
     -------
     dict
         Full configuration with all sections
     """
     config = load_config(config_path)
-    
+
     # Parse nested configurations
     full_config = {
         "data_sources": DataSourceConfig(**config.get("data_sources", {})),
@@ -281,7 +301,7 @@ def get_full_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
         "observability": ObservabilityConfig(**config.get("observability", {})),
         "logging": LoggingConfig(**config.get("logging", {})),
     }
-    
+
     return full_config
 
 
@@ -307,6 +327,9 @@ __all__ = [
     "LLMConfig",
     "EmbeddingConfig",
     "RAGConfig",
+    "RAGRetrievalConfig",
+    "RAGContextConfig",
+    "RAGGenerationConfig",
     "AgentsConfig",
     "CLIConfig",
     "ObservabilityConfig",

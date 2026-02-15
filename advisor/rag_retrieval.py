@@ -1,0 +1,304 @@
+"""
+RAG retrieval module for combining vector search with context building.
+
+This module handles retrieving relevant code snippets and building
+context for LLM queries.
+"""
+
+from typing import List, Dict, Any, Optional, Tuple
+from pathlib import Path
+from loguru import logger
+
+from advisor.vector_store import get_vector_store
+from advisor.embeddings import get_embedding_generator
+from advisor.config import get_full_config
+
+
+class RAGRetriever:
+    """Retrieves and formats context for RAG queries."""
+
+    def __init__(
+        self,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
+        max_context_length: Optional[int] = None
+    ):
+        """
+        Initialize RAG retriever.
+
+        Args:
+            top_k: Number of results to retrieve
+            min_score: Minimum similarity score threshold
+            max_context_length: Maximum context length in characters
+        """
+        config = get_full_config()
+        rag_config = config.get("rag")
+
+        self.vector_store = get_vector_store()
+        self.embedding_gen = get_embedding_generator()
+
+        self.top_k = top_k or rag_config.retrieval.top_k
+        self.min_score = min_score or rag_config.retrieval.min_score
+        self.max_context_length = max_context_length or rag_config.context.max_length
+
+        logger.info(f"Initialized RAG retriever: top_k={self.top_k}, min_score={self.min_score}")
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[Any]:  # Returns List[SearchResult]
+        """
+        Retrieve relevant code snippets for a query.
+
+        Args:
+            query: User query
+            top_k: Number of results (overrides default)
+            min_score: Minimum score (overrides default)
+            filters: Optional metadata filters
+
+        Returns:
+            List of retrieved SearchResult objects
+        """
+        top_k = top_k or self.top_k
+        min_score = min_score or self.min_score
+
+        logger.info(f"Retrieving context for query: {query[:100]}...")
+
+        # Generate query embedding
+        query_embedding = self.embedding_gen.generate_embedding(query)
+
+        # Search vector store
+        results = self.vector_store.search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            filters=filters
+        )
+
+        # Filter by minimum score
+        filtered_results = [
+            r for r in results
+            if r.score >= min_score
+        ]
+
+        logger.info(f"Retrieved {len(filtered_results)} results (filtered from {len(results)})")
+
+        return filtered_results
+
+    def build_context(
+        self,
+        results: List[Dict[str, Any]],
+        include_metadata: bool = True,
+        format_style: str = "detailed"
+    ) -> str:
+        """
+        Build formatted context from retrieval results.
+
+        Args:
+            results: Retrieved code snippets
+            include_metadata: Whether to include metadata
+            format_style: "detailed" or "compact"
+
+        Returns:
+            Formatted context string
+        """
+        if not results:
+            return "No relevant code found."
+
+        context_parts = []
+        total_length = 0
+
+        for i, result in enumerate(results, 1):
+            # Extract fields from SearchResult object
+            code = result.text
+            # Access metadata dictionary
+            metadata = result.metadata
+            file_path = metadata.get("file_path", "unknown")
+            element_type = metadata.get("type", "unknown")  # Note 'type' vs 'element_type'
+            name = metadata.get("name", "unnamed")
+            score = result.score
+
+            # Format based on style
+            if format_style == "detailed":
+                part = self._format_detailed(
+                    i, code, file_path, element_type, name, score, include_metadata
+                )
+            else:
+                part = self._format_compact(
+                    i, code, file_path, name, include_metadata
+                )
+
+            # Check length limit
+            if total_length + len(part) > self.max_context_length:
+                logger.warning(f"Context length limit reached at {i}/{len(results)} results")
+                break
+
+            context_parts.append(part)
+            total_length += len(part)
+
+        context = "\n\n".join(context_parts)
+        logger.info(f"Built context: {len(context_parts)} snippets, {total_length} chars")
+
+        return context
+
+    def _format_detailed(
+        self,
+        index: int,
+        code: str,
+        file_path: str,
+        element_type: str,
+        name: str,
+        score: float,
+        include_metadata: bool
+    ) -> str:
+        """Format result in detailed style."""
+        parts = [f"### Result {index}"]
+
+        if include_metadata:
+            parts.append(f"**File:** `{file_path}`")
+            parts.append(f"**Type:** {element_type}")
+            parts.append(f"**Name:** {name}")
+            parts.append(f"**Relevance:** {score:.3f}")
+
+        parts.append("**Code:**")
+        parts.append(f"```python\n{code}\n```")
+
+        return "\n".join(parts)
+
+    def _format_compact(
+        self,
+        index: int,
+        code: str,
+        file_path: str,
+        name: str,
+        include_metadata: bool
+    ) -> str:
+        """Format result in compact style."""
+        if include_metadata:
+            header = f"[{index}] {name} ({file_path})"
+        else:
+            header = f"[{index}]"
+
+        return f"{header}\n```python\n{code}\n```"
+
+    def retrieve_and_build_context(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        format_style: str = "detailed",
+        include_metadata: bool = True
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """
+        Retrieve and build context in one step.
+
+        Args:
+            query: User query
+            top_k: Number of results
+            min_score: Minimum score
+            filters: Metadata filters
+            format_style: Context format style
+            include_metadata: Include metadata in context
+
+        Returns:
+            Tuple of (formatted_context, raw_results)
+        """
+        results = self.retrieve(
+            query=query,
+            top_k=top_k,
+            min_score=min_score,
+            filters=filters
+        )
+
+        context = self.build_context(
+            results=results,
+            include_metadata=include_metadata,
+            format_style=format_style
+        )
+
+        return context, results
+
+    def get_file_context(
+        self,
+        file_path: str,
+        element_types: Optional[List[str]] = None
+    ) -> str:
+        """
+        Get all code elements from a specific file.
+
+        Args:
+            file_path: Path to file
+            element_types: Optional filter by element types
+
+        Returns:
+            Formatted context for the file
+        """
+        filters = {"file_path": file_path}
+
+        if element_types:
+            filters["element_type"] = {"$in": element_types}
+
+        # Use a generic query to get all elements
+        results = self.retrieve(
+            query="code",
+            top_k=100,  # Get many results
+            min_score=0.0,  # No score filtering
+            filters=filters
+        )
+
+        if not results:
+            return f"No code found in {file_path}"
+
+        context = self.build_context(
+            results=results,
+            include_metadata=True,
+            format_style="detailed"
+        )
+
+        return context
+
+    def get_similar_code(
+        self,
+        code_snippet: str,
+        top_k: Optional[int] = None,
+        exclude_exact_match: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Find code similar to a given snippet.
+
+        Args:
+            code_snippet: Code to find similar examples for
+            top_k: Number of results
+            exclude_exact_match: Exclude exact matches
+
+        Returns:
+            List of similar code snippets
+        """
+        results = self.retrieve(
+            query=code_snippet,
+            top_k=(top_k or self.top_k) + (1 if exclude_exact_match else 0),
+            min_score=self.min_score
+        )
+
+        if exclude_exact_match and results:
+            # Remove exact matches (score very close to 1.0)
+            results = [r for r in results if r.score < 0.999]
+
+        return results[:top_k or self.top_k]
+
+
+# Global retriever instance
+_rag_retriever: Optional[RAGRetriever] = None
+
+
+def get_rag_retriever() -> RAGRetriever:
+    """Get or create the global RAG retriever instance."""
+    global _rag_retriever
+
+    if _rag_retriever is None:
+        _rag_retriever = RAGRetriever()
+
+    return _rag_retriever

@@ -1,4 +1,5 @@
 """Main data preparation pipeline for egeria-python repository."""
+import sys
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
