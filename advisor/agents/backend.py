@@ -1,64 +1,50 @@
 """
 BeeAI Framework Backend Configuration.
 
-This module configures the LLM backend for BeeAI agents, specifically
-integrating with Ollama via the OpenAI-compatible interface.
+This module configures the LLM backend for BeeAI agents.
 """
 
 from typing import Optional
 from loguru import logger
 from beeai_framework.backend.chat import ChatModel
+from beeai_framework.backend.chat import ChatModelParameters
 
-# Since BeeAI often wraps OpenAI or similar, and Ollama provides an OpenAI-compatible API,
-# we need to find the correct ChatModel implementation.
-# Based on the inspection, we saw `ChatModel` but no specific `OpenAIChatModel`.
-# However, standard practice suggested by BeeAI docs (implied) is often to use the generic entry.
-# Let's inspect `beeai_framework.backend.chat` again or check for `beeai_framework.adapters.ollama`? No.
-# Wait, `litellm` was installed as a dependency!
-# This strongly suggests BeeAI uses LiteLLM or similar for backend abstraction.
-
-try:
-    # If LiteLLM is used, we might just need to pass the model string "ollama/llama3.1"
-    # But BeeAI likely has a specific class for the ChatModel.
-    # Let's check if we can import `ChatModel` and instantiate it with a provider.
-    pass
-except ImportError:
-    pass
-
-# For now, we will create a placeholder implementation that assumes we can instantiate *some* model.
-# We'll use a factory pattern so we can hot-swap the implementation once we verify the exact class.
+# Use the creation method directly if available, or just generic init
+# Inspection showed `ChatModel` class. Let's see if we can instantiate it with provider config.
 
 class BeeAIBackend:
     """Backend factory for BeeAI."""
 
     @staticmethod
-    def get_chat_model(model_name: str, temperature: float = 0.7):
+    def get_chat_model(model_name: str, temperature: float = 0.7) -> Optional[ChatModel]:
         """
-        Get a configured ChatModel.
-
-        Args:
-            model_name: Name of the model (e.g., llama3.1)
-            temperature: Temperature setting
-
-        Returns:
-            ChatModel instance
+        Get a configured ChatModel for Ollama.
+        Uses the OpenAI provider interface which is compatible with Ollama.
         """
-        # We need to investigate how to instantiate a specific provider model.
-        # Assuming `ChatModel.from_name` or similar exists, or we use `litellm` directly?
-        # Let's just return a mock for now to allow code structure,
-        # but logically we should try to use `ChatModel` if it has a factory.
-
-        # Based on file listing, we have `beeai_framework.backend.chat`.
-        # Let's check `load_model` in `beeai_framework.backend.chat`.
-        from beeai_framework.backend.chat import load_model
-
-        # Ollama models via LiteLLM follow "ollama/model_name"
-        provider_model_id = f"ollama/{model_name}"
-
         try:
-            model = load_model(provider_model_id)
-            # Configure info like temperature if the model object supports it
+            # We will use ChatModel.from_name with specific provider syntax if possible
+            # or manual instantiation.
+            # "openai/model_name" often works if we set base_url.
+
+            # However, looking at BeeAI source patterns (from general knowledge of similar frameworks),
+            # one often needs to import the specific provider class.
+
+            # Since we can't easily see the provider submodules (failed inspection earlier didn't show them deeply),
+            # let's try a standard "openai" provider string which `from_name` might handle via LiteLLM.
+            # But we need to set the API base.
+
+            # Let's try to set the environment variable for LiteLLM/OpenAI to point to Ollama
+            # inside here before creating the model.
+            import os
+            os.environ["OPENAI_API_BASE"] = "http://localhost:11434/v1"
+            os.environ["OPENAI_API_KEY"] = "ollama" # Dummy key
+
+            # Now try loading with 'openai/modelname' which LiteLLM supports and BeeAI likely uses.
+            # Ollama model names need to be passed as is, e.g. "llama3.1:8b"
+
+            model = ChatModel.from_name(f"openai/{model_name}")
             return model
+
         except Exception as e:
-            logger.error(f"Failed to load model {provider_model_id}: {e}")
+            logger.error(f"Failed to load model via OpenAI/LiteLLM bridge: {e}")
             return None

@@ -8,6 +8,7 @@ BeeAI agents to retrieve information.
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from beeai_framework.tools.tool import Tool
+from beeai_framework.emitter import Emitter
 from advisor.rag_system import get_rag_system
 
 class RAGToolInput(BaseModel):
@@ -30,13 +31,21 @@ class RAGTool(Tool):
         """Initialize the tool."""
         super().__init__()
         self.rag_system = get_rag_system()
+        self._emitter = Emitter.root().child(
+            namespace=["tool", "rag", "SearchKnowledgeBase"]
+        )
 
-    def _run(self, input: RAGToolInput) -> str:
+    def _create_emitter(self) -> Emitter:
+        """Create the emitter for the tool."""
+        return self._emitter
+
+    def _run(self, input: RAGToolInput, options: Optional[Dict[str, Any]] = None) -> str:
         """
         Execute the tool.
 
         Args:
             input: Tool input parameters
+            options: Execution options
 
         Returns:
             String response from the RAG system
