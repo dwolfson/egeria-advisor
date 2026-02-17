@@ -72,10 +72,17 @@ class RAGRetriever:
 
         # Search vector store
         results = self.vector_store.search(
+            collection_name="code_elements",
             query_embedding=query_embedding,
             top_k=top_k,
             filters=filters
         )
+
+        # Log scores for debugging
+        if results:
+            scores = [r.score for r in results]
+            logger.debug(f"Result scores: {scores}")
+            logger.debug(f"Min score threshold: {min_score}")
 
         # Filter by minimum score
         filtered_results = [
@@ -89,7 +96,7 @@ class RAGRetriever:
 
     def build_context(
         self,
-        results: List[Dict[str, Any]],
+        results: List[Any],  # SearchResult objects
         include_metadata: bool = True,
         format_style: str = "detailed"
     ) -> str:
@@ -97,7 +104,7 @@ class RAGRetriever:
         Build formatted context from retrieval results.
 
         Args:
-            results: Retrieved code snippets
+            results: Retrieved SearchResult objects
             include_metadata: Whether to include metadata
             format_style: "detailed" or "compact"
 
@@ -204,7 +211,7 @@ class RAGRetriever:
             include_metadata: Include metadata in context
 
         Returns:
-            Tuple of (formatted_context, raw_results)
+            Tuple of (formatted_context, sources_as_dicts)
         """
         results = self.retrieve(
             query=query,
@@ -219,7 +226,20 @@ class RAGRetriever:
             format_style=format_style
         )
 
-        return context, results
+        # Convert SearchResult objects to dictionaries for easier handling
+        sources = []
+        for result in results:
+            source_dict = {
+                "text": result.text,
+                "score": result.score,
+                "file_path": result.metadata.get("file_path", "unknown"),
+                "name": result.metadata.get("name", "unnamed"),
+                "type": result.metadata.get("type", "unknown"),
+                "module": result.metadata.get("module", ""),
+            }
+            sources.append(source_dict)
+
+        return context, sources
 
     def get_file_context(
         self,
@@ -275,7 +295,7 @@ class RAGRetriever:
             exclude_exact_match: Exclude exact matches
 
         Returns:
-            List of similar code snippets
+            List of similar code snippets as dictionaries
         """
         results = self.retrieve(
             query=code_snippet,
@@ -287,7 +307,20 @@ class RAGRetriever:
             # Remove exact matches (score very close to 1.0)
             results = [r for r in results if r.score < 0.999]
 
-        return results[:top_k or self.top_k]
+        # Convert SearchResult objects to dictionaries
+        similar_code = []
+        for result in results[:top_k or self.top_k]:
+            code_dict = {
+                "text": result.text,
+                "score": result.score,
+                "file_path": result.metadata.get("file_path", "unknown"),
+                "name": result.metadata.get("name", "unnamed"),
+                "type": result.metadata.get("type", "unknown"),
+                "module": result.metadata.get("module", ""),
+            }
+            similar_code.append(code_dict)
+
+        return similar_code
 
 
 # Global retriever instance

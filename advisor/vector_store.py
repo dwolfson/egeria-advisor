@@ -212,14 +212,17 @@ class VectorStoreManager:
         """Get a collection by name."""
         self.connect()
 
-        if collection_name in self._collections:
-            return self._collections[collection_name]
+        # DISABLED: Collection caching to avoid stale query plans
+        # if collection_name in self._collections:
+        #     return self._collections[collection_name]
 
         if not utility.has_collection(collection_name):
             raise ValueError(f"Collection does not exist: {collection_name}")
 
+        # Always create fresh Collection object
         collection = Collection(collection_name)
-        self._collections[collection_name] = collection
+        # Don't cache it
+        # self._collections[collection_name] = collection
         return collection
 
     def insert_data(
@@ -320,7 +323,11 @@ class VectorStoreManager:
         self.connect()
         collection = self.get_collection(collection_name)
 
-        # Load collection into memory
+        # Release and reload collection to ensure fresh state
+        try:
+            collection.release()
+        except:
+            pass  # Collection might not be loaded yet
         collection.load()
 
         # Generate query embedding if text provided
@@ -352,13 +359,15 @@ class VectorStoreManager:
             filter_expr = " and ".join(filter_parts) if filter_parts else None
 
         # Search parameters
+        # For IVF_FLAT with nlist=1024, use higher nprobe for better recall
         search_params = {
             "metric_type": "L2",
-            "params": {"nprobe": 10}
+            "params": {"nprobe": 128}  # Search 128 out of 1024 clusters (~12.5%)
         }
 
         query_preview = query_text[:50] if query_text else "embedding"
         logger.debug(f"Searching {collection_name} for: {query_preview}...")
+        logger.debug(f"Search params: limit={top_k}, nprobe={search_params['params']['nprobe']}, filter={filter_expr}")
 
         # Perform search
         results = collection.search(
@@ -369,15 +378,19 @@ class VectorStoreManager:
             expr=filter_expr,
             output_fields=output_fields
         )
+        
+        logger.debug(f"Milvus returned {len(results[0]) if results else 0} hits")
 
         # Parse results into SearchResult objects
         search_results = []
         for hits in results:
             for hit in hits:
-                # Convert distance to similarity score
-                # For L2, smaller is better. We can use 1/(1+distance) or similar
-                # depending on how Milvus returns it. Assuming L2 distance here.
-                score = 1.0 / (1.0 + hit.distance)
+                # Convert L2 distance to similarity score
+                # L2 distance ranges from 0 (identical) to ~2.0 (very different) for normalized embeddings
+                # Use exponential decay: score = exp(-distance)
+                # This maps: distance=0 → score=1.0, distance=1.0 → score=0.37, distance=2.0 → score=0.14
+                import math
+                score = math.exp(-hit.distance)
 
                 result = SearchResult(
                     id=hit.id,
@@ -432,15 +445,12 @@ class VectorStoreManager:
             logger.warning(f"Collection does not exist: {collection_name}")
 
 
-# Global instance
+# Global instance - DISABLED to avoid caching issues
 _vector_store: Optional[VectorStoreManager] = None
 
 
 def get_vector_store() -> VectorStoreManager:
     """Get or create the global vector store manager instance."""
-    global _vector_store
-
-    if _vector_store is None:
-        _vector_store = VectorStoreManager()
-
-    return _vector_store
+    # Always create a fresh instance to avoid caching issues
+    # TODO: Re-enable singleton after resolving Milvus caching
+    return VectorStoreManager()

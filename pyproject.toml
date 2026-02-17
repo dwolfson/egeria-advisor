@@ -12,8 +12,10 @@ license = {text = "Apache-2.0"}
 dependencies = [
     "pymilvus>=2.4.0",
     "docling>=1.0.0",
-    "click>=8.0.0",
-    "rich>=13.0.0",
+    "click>=8.1.0",
+    "rich>=13.7.0",
+    "prompt-toolkit>=3.0.0",
+    "pygments>=2.17.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
@@ -24,8 +26,8 @@ dependencies = [
     "langchain-community>=0.1.0",
     "pyyaml>=6.0.0",
     "loguru>=0.7.0",
-    "beeai-framework>=0.0.1",
-    "agentstack>=0.2.0"
+    "radon>=6.0.1",        # Code metrics (CC, MI, Halstead)
+    "pygount>=1.6.1",      # Accurate line counting
 ]
 
 [project.optional-dependencies]
@@ -39,7 +41,7 @@ dev = [
 ]
 
 [project.scripts]
-egeria-advisor = "advisor.cli.advisor_cli:main"
+egeria-advisor = "advisor.cli.main:cli"
 
 [build-system]
 requires = ["setuptools>=68.0.0", "wheel"]

@@ -12,6 +12,8 @@ from advisor.llm_client import get_ollama_client
 from advisor.rag_retrieval import get_rag_retriever
 from advisor.query_processor import get_query_processor
 from advisor.mlflow_tracking import get_mlflow_tracker
+from advisor.analytics import get_analytics_manager
+from advisor.relationships import get_relationship_query_handler
 from advisor.config import get_full_config
 
 
@@ -24,6 +26,8 @@ class RAGSystem:
         self.retriever = get_rag_retriever()
         self.query_processor = get_query_processor()
         self.mlflow_tracker = get_mlflow_tracker()
+        self.analytics = get_analytics_manager()
+        self.relationships = get_relationship_query_handler()
 
         config = get_full_config()
         self.rag_config = config.get("rag")
@@ -81,6 +85,38 @@ class RAGSystem:
         query_analysis = self.query_processor.process(user_query)
         logger.info(f"Query type: {query_analysis['query_type']}")
 
+        # Handle quantitative queries directly with analytics
+        if query_analysis['query_type'] == 'quantitative':
+            logger.info("Handling quantitative query with analytics module")
+            response = self.analytics.answer_quantitative_query(user_query)
+            return {
+                "query": user_query,
+                "response": response,
+                "query_type": "quantitative",
+                "sources": [],
+                "num_sources": 0,
+                "retrieval_time": 0.0,
+                "generation_time": 0.0,
+                "avg_relevance_score": 0.0,
+                "context_length": 0
+            }
+        
+        # Handle relationship queries directly with relationship graph
+        if query_analysis['query_type'] == 'relationship':
+            logger.info("Handling relationship query with relationship graph")
+            response = self.relationships.answer_relationship_query(user_query)
+            return {
+                "query": user_query,
+                "response": response,
+                "query_type": "relationship",
+                "sources": [],
+                "num_sources": 0,
+                "retrieval_time": 0.0,
+                "generation_time": 0.0,
+                "avg_relevance_score": 0.0,
+                "context_length": 0
+            }
+
         # Get search strategy
         search_strategy = query_analysis["search_strategy"]
 
@@ -118,7 +154,14 @@ class RAGSystem:
         # Calculate average relevance score
         avg_relevance_score = 0.0
         if sources:
-            avg_relevance_score = sum(s.get("score", 0.0) for s in sources) / len(sources)
+            # Handle both SearchResult objects and dictionaries
+            scores = []
+            for s in sources:
+                if hasattr(s, 'score'):
+                    scores.append(s.score)
+                elif isinstance(s, dict):
+                    scores.append(s.get("score", 0.0))
+            avg_relevance_score = sum(scores) / len(scores) if scores else 0.0
 
         # Build result with enhanced metrics
         result = {
@@ -139,23 +182,25 @@ class RAGSystem:
 
     def _get_system_prompt(self) -> str:
         """Get system prompt for the LLM."""
-        return """You are an expert code advisor for the Egeria project. Your role is to:
+        return """You are an expert assistant for the Egeria Python library (pyegeria).
 
-1. Provide accurate, helpful information about the codebase
-2. Explain code functionality clearly and concisely
-3. Suggest best practices and improvements
-4. Help debug issues and understand error messages
-5. Reference specific code examples when relevant
+CRITICAL RULES - FOLLOW EXACTLY:
 
-Guidelines:
-- Be precise and technical when needed
-- Provide code examples to illustrate points
-- Cite specific files/functions when referencing code
-- If you're unsure, say so rather than guessing
-- Keep responses focused and relevant to the question
+1. ONLY use information from the provided code context
+2. If the context doesn't contain the answer, say: "I don't have enough information in the provided context to answer that question accurately."
+3. ALWAYS cite specific files, classes, and methods from the context
+4. Be technical and specific - include class names, method signatures, and parameters
+5. When showing code, make it complete and runnable
+6. Do NOT make up or infer information not in the context
+7. Do NOT use general knowledge about Python or other libraries
 
-When code context is provided, use it to give specific, accurate answers.
-When no context is available, provide general guidance based on best practices."""
+RESPONSE FORMAT:
+- Start with a direct answer
+- Provide specific code examples from the context
+- Cite sources: "From [file_path]: [class/method]"
+- If showing usage, include imports and setup
+
+Remember: Your knowledge is LIMITED to the provided context. If it's not in the context, you don't know it."""
 
     def _build_prompt(
         self,
@@ -165,27 +210,57 @@ When no context is available, provide general guidance based on best practices."
     ) -> str:
         """Build the complete prompt for the LLM."""
         if context:
-            prompt = f"""Based on the following code from the Egeria project, please answer the user's question.
-
-# Relevant Code Context
+            prompt = f"""# CODE CONTEXT FROM EGERIA PYTHON LIBRARY
 
 {context}
 
-# User Question
+# USER QUESTION
 
 {user_query}
 
-# Instructions
+# YOUR TASK
 
-Please provide a helpful, accurate response based on the code context above. Reference specific code elements when relevant."""
+Answer the question using ONLY the code context above. Follow these rules:
+
+1. Use ONLY information from the context - do not add external knowledge
+2. Cite specific files, classes, and methods
+3. If showing code, make it complete with imports
+4. If the context doesn't answer the question, say so explicitly
+5. Be specific and technical - include parameter names, types, return values
+
+Example good response:
+"To create a glossary, use the GlossaryManager class from pyegeria.glossary_manager.py:
+
+```python
+from pyegeria import GlossaryManager
+
+glossary_mgr = GlossaryManager(
+    server_name="view-server",
+    platform_url="https://localhost:9443",
+    user_id="garygeeke"
+)
+
+glossary = glossary_mgr.create_glossary(
+    display_name="My Glossary",
+    description="Business vocabulary"
+)
+```
+
+Source: pyegeria/glossary_manager.py - GlossaryManager.create_glossary()"
+
+Now answer the user's question following this format."""
         else:
-            prompt = f"""# User Question
+            prompt = f"""# USER QUESTION
 
 {user_query}
 
-# Instructions
+# IMPORTANT
 
-Please provide a helpful response based on your knowledge of software development best practices. Note that no specific code context is available for this query."""
+No code context is available for this question. You should respond:
+
+"I don't have access to the specific code context needed to answer this question accurately. Please try rephrasing your question or asking about a specific Egeria concept, class, or method."
+
+Do NOT attempt to answer from general knowledge."""
 
         return prompt
 
@@ -315,10 +390,10 @@ Please provide a helpful response based on your knowledge of software developmen
                     top_k=top_k
                 )
 
-                # Calculate average similarity score
+                # Calculate average similarity score (results are now dictionaries)
                 avg_similarity_score = 0.0
                 if results:
-                    avg_similarity_score = sum(r.get("score", 0.0) for r in results) / len(results)
+                    avg_similarity_score = sum(r["score"] for r in results) / len(results)
 
                 tracker.log_metrics({
                     "num_results": len(results),

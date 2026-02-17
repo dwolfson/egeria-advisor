@@ -7,21 +7,137 @@ using MLflow for observability and performance monitoring.
 
 import mlflow
 from mlflow.tracking import MlflowClient
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from loguru import logger
 from contextlib import contextmanager
 import time
+import psutil
+import os
 
 from advisor.config import settings
 
 
+class ResourceMonitor:
+    """Monitor system resource consumption."""
+    
+    def __init__(self):
+        """Initialize resource monitor."""
+        self.process = psutil.Process(os.getpid())
+        self.start_cpu_percent = None
+        self.start_memory_mb = None
+        self.start_time = None
+        
+    def start(self):
+        """Start monitoring resources."""
+        self.start_time = time.time()
+        self.start_cpu_percent = self.process.cpu_percent()
+        self.start_memory_mb = self.process.memory_info().rss / 1024 / 1024
+        
+    def get_metrics(self) -> Dict[str, float]:
+        """
+        Get resource consumption metrics.
+        
+        Returns:
+            Dictionary with resource metrics
+        """
+        if self.start_time is None:
+            return {}
+        
+        duration = time.time() - self.start_time
+        current_cpu = self.process.cpu_percent()
+        current_memory_mb = self.process.memory_info().rss / 1024 / 1024
+        
+        metrics = {
+            "resource_duration_seconds": duration,
+            "resource_cpu_percent": current_cpu,
+            "resource_memory_mb": current_memory_mb,
+            "resource_memory_delta_mb": current_memory_mb - self.start_memory_mb,
+        }
+        
+        # Try to get GPU metrics if available
+        try:
+            import torch
+            if torch.cuda.is_available():
+                metrics["resource_gpu_memory_allocated_mb"] = torch.cuda.memory_allocated() / 1024 / 1024
+                metrics["resource_gpu_memory_reserved_mb"] = torch.cuda.memory_reserved() / 1024 / 1024
+                metrics["resource_gpu_utilization_percent"] = torch.cuda.utilization()
+        except (ImportError, Exception):
+            pass
+        
+        return metrics
+
+
+class AccuracyTracker:
+    """Track query accuracy metrics."""
+    
+    def __init__(self):
+        """Initialize accuracy tracker."""
+        self.feedback_scores: List[float] = []
+        self.relevance_scores: List[float] = []
+        self.confidence_scores: List[float] = []
+        
+    def add_feedback(self, score: float):
+        """
+        Add user feedback score.
+        
+        Args:
+            score: Feedback score (0-1 or 1-5 scale)
+        """
+        # Normalize to 0-1 scale
+        normalized = score / 5.0 if score > 1.0 else score
+        self.feedback_scores.append(normalized)
+        
+    def add_relevance(self, score: float):
+        """
+        Add relevance score.
+        
+        Args:
+            score: Relevance score (0-1)
+        """
+        self.relevance_scores.append(score)
+        
+    def add_confidence(self, score: float):
+        """
+        Add confidence score.
+        
+        Args:
+            score: Confidence score (0-1)
+        """
+        self.confidence_scores.append(score)
+        
+    def get_metrics(self) -> Dict[str, float]:
+        """
+        Get accuracy metrics.
+        
+        Returns:
+            Dictionary with accuracy metrics
+        """
+        metrics = {}
+        
+        if self.feedback_scores:
+            metrics["accuracy_feedback_avg"] = sum(self.feedback_scores) / len(self.feedback_scores)
+            metrics["accuracy_feedback_count"] = float(len(self.feedback_scores))
+            
+        if self.relevance_scores:
+            metrics["accuracy_relevance_avg"] = sum(self.relevance_scores) / len(self.relevance_scores)
+            metrics["accuracy_relevance_count"] = float(len(self.relevance_scores))
+            
+        if self.confidence_scores:
+            metrics["accuracy_confidence_avg"] = sum(self.confidence_scores) / len(self.confidence_scores)
+            metrics["accuracy_confidence_count"] = float(len(self.confidence_scores))
+            
+        return metrics
+
+
 class MLflowTracker:
-    """MLflow tracking wrapper for Egeria Advisor."""
+    """MLflow tracking wrapper for Egeria Advisor with resource and accuracy monitoring."""
     
     def __init__(
         self,
         tracking_uri: Optional[str] = None,
-        experiment_name: Optional[str] = None
+        experiment_name: Optional[str] = None,
+        enable_resource_monitoring: bool = True,
+        enable_accuracy_tracking: bool = True
     ):
         """
         Initialize MLflow tracker.
@@ -29,10 +145,18 @@ class MLflowTracker:
         Args:
             tracking_uri: MLflow tracking server URI
             experiment_name: Name of the experiment
+            enable_resource_monitoring: Enable CPU/memory/GPU monitoring
+            enable_accuracy_tracking: Enable accuracy metrics tracking
         """
         self.tracking_uri = tracking_uri or settings.mlflow_tracking_uri
         self.experiment_name = experiment_name or settings.mlflow_experiment_name
         self.enabled = settings.mlflow_enable_tracking
+        self.enable_resource_monitoring = enable_resource_monitoring
+        self.enable_accuracy_tracking = enable_accuracy_tracking
+        
+        # Initialize monitors
+        self.resource_monitor = ResourceMonitor() if enable_resource_monitoring else None
+        self.accuracy_tracker = AccuracyTracker() if enable_accuracy_tracking else None
         
         if not self.enabled:
             logger.info("MLflow tracking is disabled")
@@ -98,52 +222,100 @@ class MLflowTracker:
         self,
         operation_name: str,
         params: Optional[Dict[str, Any]] = None,
-        tags: Optional[Dict[str, str]] = None
+        tags: Optional[Dict[str, str]] = None,
+        track_resources: bool = True,
+        track_accuracy: bool = True
     ):
         """
-        Context manager for tracking an operation with MLflow.
+        Context manager for tracking an operation with MLflow including resource and accuracy monitoring.
         
         Args:
             operation_name: Name of the operation
             params: Parameters to log
             tags: Tags to add
+            track_resources: Track resource consumption
+            track_accuracy: Track accuracy metrics
             
         Yields:
-            Tracker object with log_metrics method
+            Tracker object with log_metrics, add_feedback, add_relevance, add_confidence methods
         """
         if not self.enabled:
             # Return a dummy tracker that does nothing
             class DummyTracker:
                 def log_metrics(self, metrics: Dict[str, float]):
                     pass
+                def add_feedback(self, score: float):
+                    pass
+                def add_relevance(self, score: float):
+                    pass
+                def add_confidence(self, score: float):
+                    pass
             yield DummyTracker()
             return
         
         start_time = time.time()
+        
+        # Start resource monitoring
+        if track_resources and self.resource_monitor:
+            self.resource_monitor.start()
+        
+        # Create fresh accuracy tracker for this operation
+        operation_accuracy = AccuracyTracker() if track_accuracy and self.enable_accuracy_tracking else None
         
         try:
             with self.start_run(run_name=operation_name, tags=tags) as run:
                 if params:
                     self.log_params(params)
                 
-                # Create a tracker object that can log metrics
+                # Create a tracker object that can log metrics and accuracy
                 class OperationTracker:
-                    def __init__(self, parent):
+                    def __init__(self, parent, accuracy_tracker):
                         self.parent = parent
+                        self.accuracy_tracker = accuracy_tracker
                     
                     def log_metrics(self, metrics: Dict[str, float]):
                         self.parent.log_metrics(metrics)
+                    
+                    def add_feedback(self, score: float):
+                        if self.accuracy_tracker:
+                            self.accuracy_tracker.add_feedback(score)
+                    
+                    def add_relevance(self, score: float):
+                        if self.accuracy_tracker:
+                            self.accuracy_tracker.add_relevance(score)
+                    
+                    def add_confidence(self, score: float):
+                        if self.accuracy_tracker:
+                            self.accuracy_tracker.add_confidence(score)
                 
-                yield OperationTracker(self)
+                yield OperationTracker(self, operation_accuracy)
                 
                 # Log duration
                 duration = time.time() - start_time
-                self.log_metrics({"operation_duration_seconds": duration})
+                metrics = {"operation_duration_seconds": duration}
+                
+                # Add resource metrics
+                if track_resources and self.resource_monitor:
+                    resource_metrics = self.resource_monitor.get_metrics()
+                    metrics.update(resource_metrics)
+                
+                # Add accuracy metrics
+                if operation_accuracy:
+                    accuracy_metrics = operation_accuracy.get_metrics()
+                    metrics.update(accuracy_metrics)
+                
+                self.log_metrics(metrics)
                 
         except Exception as e:
             logger.error(f"Error tracking operation {operation_name}: {e}")
             class DummyTracker:
                 def log_metrics(self, metrics: Dict[str, float]):
+                    pass
+                def add_feedback(self, score: float):
+                    pass
+                def add_relevance(self, score: float):
+                    pass
+                def add_confidence(self, score: float):
                     pass
             yield DummyTracker()
     

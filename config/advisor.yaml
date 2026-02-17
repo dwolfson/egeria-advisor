@@ -31,16 +31,16 @@ llm:
   provider: ollama
   base_url: http://localhost:11434
   models:
-    query: llama3.2:3b          # Fast model for queries
-    code: llama3.2:3b            # Code-specialized model (fallback)
-    conversation: llama3.2:3b    # General conversation
-    maintenance: llama3.2:3b     # Code analysis (fallback)
+    query: llama3.1:8b          # Fast model for queries
+    code: llama3.1:8b            # Code-specialized model (fallback)
+    conversation: llama3.1:8b    # General conversation
+    maintenance: llama3.1:8b     # Code analysis (fallback)
   parameters:
-    temperature: 0.7
-    max_tokens: 2000
+    temperature: 0.3             # Lowered from 0.7 for factual answers
+    max_tokens: 3000             # Increased from 2000
     top_p: 0.9
     top_k: 40
-    repeat_penalty: 1.1
+    repeat_penalty: 1.2          # Increased from 1.1 to reduce repetition
     timeout: 60
   model_overrides:
     code:
@@ -61,16 +61,16 @@ rag:
   chunk_size: 512
   chunk_overlap: 50
   retrieval:
-    top_k: 5
-    min_score: 0.7
+    top_k: 10              # Increased from 5 for more sources
+    min_score: 0.3         # Lowered to 0.3 for exponential score formula (exp(-distance))
     rerank: false
   context:
-    max_length: 4000
+    max_length: 6000       # Increased from 4000 for more context
     format_style: detailed
     include_metadata: true
   generation:
-    temperature: 0.7
-    max_tokens: 2000
+    temperature: 0.3       # Lowered from 0.7 for more focused answers
+    max_tokens: 3000       # Increased from 2000 for longer answers
     stream: false
 
 agents:

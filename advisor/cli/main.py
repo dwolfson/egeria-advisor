@@ -1,0 +1,293 @@
+"""
+Egeria Advisor CLI - Main Entry Point
+
+This module provides the main command-line interface for the Egeria Advisor.
+"""
+
+import sys
+from pathlib import Path
+from typing import Optional
+
+import click
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from loguru import logger
+
+from advisor.rag_system import get_rag_system
+from advisor.cli.formatters import ResponseFormatter
+from advisor.cli.interactive import InteractiveSession
+
+console = Console()
+
+
+@click.command()
+@click.argument('query', required=False)
+@click.option(
+    '--interactive', '-i',
+    is_flag=True,
+    help='Start interactive mode'
+)
+@click.option(
+    '--context', '-c',
+    type=str,
+    help='Provide context for the query (e.g., "glossary", "assets")'
+)
+@click.option(
+    '--format', '-f',
+    type=click.Choice(['text', 'json', 'markdown'], case_sensitive=False),
+    default='text',
+    help='Output format'
+)
+@click.option(
+    '--no-citations',
+    is_flag=True,
+    help='Hide source citations'
+)
+@click.option(
+    '--no-color',
+    is_flag=True,
+    help='Disable colored output'
+)
+@click.option(
+    '--verbose', '-v',
+    is_flag=True,
+    help='Show detailed information'
+)
+@click.option(
+    '--track/--no-track',
+    default=True,
+    help='Enable/disable MLflow tracking'
+)
+@click.option(
+    '--debug', '-d',
+    is_flag=True,
+    help='Show debug/trace messages (loguru INFO level)'
+)
+@click.version_option(version='0.1.0', prog_name='egeria-advisor')
+def cli(
+    query: Optional[str],
+    interactive: bool,
+    context: Optional[str],
+    format: str,
+    no_citations: bool,
+    no_color: bool,
+    verbose: bool,
+    track: bool,
+    debug: bool
+):
+    """
+    Egeria Advisor - AI-powered assistance for pyegeria
+    
+    Ask questions about Egeria concepts, get code examples, and receive
+    guidance on using the pyegeria library.
+    
+    Examples:
+    
+        \b
+        # Ask a direct question
+        egeria-advisor "How do I create a glossary?"
+        
+        \b
+        # Start interactive mode
+        egeria-advisor --interactive
+        
+        \b
+        # Get JSON output
+        egeria-advisor "What is a collection?" --format=json
+        
+        \b
+        # Provide context
+        egeria-advisor "Show me examples" --context=glossary
+    """
+    # Configure logging level based on debug flag
+    if not debug:
+        # Disable all loguru logs when not in debug mode
+        logger.remove()  # Remove all handlers
+        # Redirect stderr to suppress library warnings (like amdgpu.ids)
+        import os
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, 2)  # Redirect stderr (fd 2) to /dev/null
+    
+    # Disable colors if requested
+    if no_color:
+        console.no_color = True
+    
+    # Build options dict
+    options = {
+        'context': context,
+        'format': format,
+        'show_citations': not no_citations,
+        'verbose': verbose,
+        'track_metrics': track,
+        'debug': debug,
+    }
+    
+    try:
+        if interactive:
+            # Start interactive mode
+            start_interactive(options)
+        elif query:
+            # Handle direct query
+            direct_query(query, options)
+        else:
+            # No query provided, show help
+            ctx = click.get_current_context()
+            click.echo(ctx.get_help())
+            sys.exit(0)
+    
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user[/yellow]")
+        sys.exit(0)
+    except SystemExit:
+        # Re-raise SystemExit to allow normal exit
+        raise
+    except Exception as e:
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"[red]✗ Error:[/red] {e}")
+            console.print("[dim]Use --verbose for more details[/dim]")
+        sys.exit(1)
+
+
+def direct_query(query: str, options: dict):
+    """
+    Handle a single direct query and exit.
+    
+    Parameters
+    ----------
+    query : str
+        The user's query
+    options : dict
+        CLI options
+    """
+    verbose = options.get('verbose', False)
+    
+    # Show welcome message
+    if verbose:
+        console.print(Panel(
+            "[bold cyan]Egeria Advisor[/bold cyan]\n"
+            "AI-powered assistance for pyegeria",
+            border_style="cyan"
+        ))
+        console.print()
+    
+    # Initialize RAG system
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            progress.add_task("Initializing advisor...", total=None)
+            rag = get_rag_system()
+    except Exception as e:
+        console.print(f"[red]✗ Failed to initialize advisor:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        sys.exit(1)
+    
+    # Check system health
+    if verbose:
+        health = rag.health_check()
+        if not all(health.values()):
+            console.print("[yellow]⚠ Warning: Some services are not healthy[/yellow]")
+            for service, status in health.items():
+                icon = "✓" if status else "✗"
+                color = "green" if status else "red"
+                console.print(f"  [{color}]{icon}[/{color}] {service}")
+            console.print()
+    
+    # Execute query
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            progress.add_task("Processing query...", total=None)
+            
+            result = rag.query(
+                user_query=query,
+                include_context=True,
+                track_metrics=options.get('track_metrics', True)
+            )
+    except Exception as e:
+        console.print(f"[red]✗ Query failed:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        sys.exit(1)
+    
+    # Format and display response
+    formatter = ResponseFormatter(
+        format_type=options.get('format', 'text'),
+        show_citations=options.get('show_citations', True),
+        verbose=verbose
+    )
+    
+    formatter.display(result, console)
+
+
+def start_interactive(options: dict):
+    """
+    Start interactive REPL mode.
+    
+    Parameters
+    ----------
+    options : dict
+        CLI options
+    """
+    verbose = options.get('verbose', False)
+    
+    # Show welcome banner
+    console.print(Panel(
+        "[bold cyan]Egeria Advisor - Interactive Mode[/bold cyan]\n\n"
+        "Ask questions about Egeria concepts, get code examples, and receive guidance.\n\n"
+        "[dim]Commands:[/dim]\n"
+        "  [cyan]/help[/cyan]     - Show help\n"
+        "  [cyan]/clear[/cyan]    - Clear conversation context\n"
+        "  [cyan]/history[/cyan]  - Show query history\n"
+        "  [cyan]/exit[/cyan]     - Exit (or Ctrl+D)\n\n"
+        "[dim]Type your question and press Enter[/dim]",
+        border_style="cyan"
+    ))
+    console.print()
+    
+    # Initialize RAG system
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            progress.add_task("Initializing advisor...", total=None)
+            rag = get_rag_system()
+    except Exception as e:
+        console.print(f"[red]✗ Failed to initialize advisor:[/red] {e}")
+        if verbose:
+            console.print_exception()
+        sys.exit(1)
+    
+    # Check system health
+    health = rag.health_check()
+    if not all(health.values()):
+        console.print("[yellow]⚠ Warning: Some services are not healthy[/yellow]")
+        for service, status in health.items():
+            icon = "✓" if status else "✗"
+            color = "green" if status else "red"
+            console.print(f"  [{color}]{icon}[/{color}] {service}")
+        console.print()
+    else:
+        console.print("[green]✓[/green] All systems ready\n")
+    
+    # Start interactive session
+    session = InteractiveSession(rag, options, console)
+    session.run()
+
+
+if __name__ == '__main__':
+    cli()
