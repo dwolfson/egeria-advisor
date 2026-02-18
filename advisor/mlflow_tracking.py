@@ -378,12 +378,27 @@ class MLflowTracker:
 _mlflow_tracker: Optional[MLflowTracker] = None
 
 
-def get_mlflow_tracker() -> MLflowTracker:
-    """Get or create the global MLflow tracker instance."""
+def get_mlflow_tracker(
+    enable_resource_monitoring: bool = True,
+    enable_accuracy_tracking: bool = True
+) -> MLflowTracker:
+    """
+    Get or create the global MLflow tracker instance.
+    
+    Args:
+        enable_resource_monitoring: Enable CPU/memory/GPU monitoring
+        enable_accuracy_tracking: Enable accuracy metrics tracking
+        
+    Returns:
+        MLflowTracker instance
+    """
     global _mlflow_tracker
     
     if _mlflow_tracker is None:
-        _mlflow_tracker = MLflowTracker()
+        _mlflow_tracker = MLflowTracker(
+            enable_resource_monitoring=enable_resource_monitoring,
+            enable_accuracy_tracking=enable_accuracy_tracking
+        )
     
     return _mlflow_tracker
 

@@ -25,7 +25,10 @@ class RAGSystem:
         self.llm_client = get_ollama_client()
         self.retriever = get_rag_retriever()
         self.query_processor = get_query_processor()
-        self.mlflow_tracker = get_mlflow_tracker()
+        self.mlflow_tracker = get_mlflow_tracker(
+            enable_resource_monitoring=True,
+            enable_accuracy_tracking=True
+        )
         self.analytics = get_analytics_manager()
         self.relationships = get_relationship_query_handler()
 
