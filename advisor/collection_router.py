@@ -258,11 +258,14 @@ class CollectionRouter:
     
     def get_routing_summary(self) -> Dict[str, Any]:
         """Get summary of routing configuration."""
+        # domain_terms is a dict, get its keys
+        domain_categories = list(self.domain_terms.keys()) if isinstance(self.domain_terms, dict) else []
+        
         return {
             "total_collections": len(self.collections),
             "enabled_collections": [c.name for c in self.collections],
             "collections_by_priority": [c.name for c in get_collections_by_priority()],
-            "domain_categories": list(self.domain_terms.keys())
+            "domain_categories": domain_categories
         }
 
 
