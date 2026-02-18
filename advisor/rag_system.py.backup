@@ -25,10 +25,7 @@ class RAGSystem:
         self.llm_client = get_ollama_client()
         self.retriever = get_rag_retriever()
         self.query_processor = get_query_processor()
-        self.mlflow_tracker = get_mlflow_tracker(
-            enable_resource_monitoring=True,
-            enable_accuracy_tracking=True
-        )
+        self.mlflow_tracker = get_mlflow_tracker()
         self.analytics = get_analytics_manager()
         self.relationships = get_relationship_query_handler()
 
@@ -63,21 +60,9 @@ class RAGSystem:
                 params={
                     "query_length": len(user_query),
                     "include_context": include_context
-                },
-                track_resources=True,  # Enable resource monitoring
-                track_accuracy=True    # Enable accuracy tracking
+                }
             ) as tracker:
                 result = self._process_query(user_query, include_context)
-                
-                # Add relevance scores from sources
-                if result.get("sources"):
-                    for source in result["sources"]:
-                        if hasattr(source, 'score'):
-                            tracker.add_relevance(source.score)
-                        elif isinstance(source, dict) and 'score' in source:
-                            tracker.add_relevance(source['score'])
-                
-                # Log all metrics
                 tracker.log_metrics({
                     "response_length": len(result["response"]),
                     "num_sources": result.get("num_sources", 0),
