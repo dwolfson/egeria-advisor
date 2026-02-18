@@ -6,29 +6,32 @@ relevant information for RAG retrieval.
 """
 
 from typing import Dict, Any, Optional, List, Tuple
-from enum import Enum
 from loguru import logger
 import re
 
-
-class QueryType(Enum):
-    """Types of queries the system can handle."""
-    CODE_SEARCH = "code_search"  # Find specific code
-    EXPLANATION = "explanation"  # Explain how something works
-    EXAMPLE = "example"  # Show examples
-    COMPARISON = "comparison"  # Compare approaches
-    BEST_PRACTICE = "best_practice"  # Best practices
-    DEBUGGING = "debugging"  # Help with errors
-    QUANTITATIVE = "quantitative"  # Statistics and metrics
-    RELATIONSHIP = "relationship"  # Code relationships
-    GENERAL = "general"  # General question
+# Import from the new extensible pattern system
+from advisor.query_patterns import (
+    QueryType,
+    PatternPriority,
+    get_patterns_by_priority,
+    get_domain_terms,
+    get_special_rules,
+    add_pattern,
+    add_domain_term
+)
 
 
 class QueryProcessor:
     """Processes and analyzes user queries."""
     
     def __init__(self):
-        """Initialize query processor."""
+        """Initialize query processor with extensible pattern system."""
+        # Load patterns from centralized configuration
+        self.pattern_priorities = get_patterns_by_priority()
+        self.domain_terms = get_domain_terms()
+        self.special_rules = get_special_rules()
+        
+        # Build flattened pattern dict for backward compatibility
         self.query_patterns = self._build_query_patterns()
         
         # Indicator lists for context-aware detection
@@ -44,61 +47,59 @@ class QueryProcessor:
             "error", "exception", "fail", "broken", "not working",
             "doesn't work", "isn't working", "bug", "issue"
         ]
-        logger.info("Initialized query processor")
+        logger.info("Initialized query processor with extensible pattern system")
     
     def _build_query_patterns(self) -> Dict[QueryType, List[str]]:
         """
-        Build patterns for query type detection with priority ordering.
+        Build flattened pattern dictionary from priority-based configuration.
         
-        Patterns are checked in order of specificity (most specific first).
-        Multi-word patterns are checked before single-word patterns.
+        This maintains backward compatibility while using the new extensible system.
+        Patterns are organized by priority in the source configuration.
         """
-        return {
-            # High priority - specific multi-word patterns
-            QueryType.QUANTITATIVE: [
-                "how many", "how much", "number of", "lines of code",
-                "count", "total", "statistics", "metrics", "size",
-                "summary", "overview", "average"
-            ],
-            QueryType.BEST_PRACTICE: [
-                "best practice", "best way", "recommended", "should i",
-                "proper way", "correct way", "standard", "recommended approach"
-            ],
-            QueryType.COMPARISON: [
-                "difference between", "compare", "versus", "vs",
-                "differ from", "better", "which", "choose between"
-            ],
-            QueryType.DEBUGGING: [
-                "why isn't", "isn't working", "isn't this working", "not working",
-                "getting an error", "i'm getting an error",
-                "how do i fix", "troubleshoot", "fix", "debug"
-            ],
-            # Medium priority - action-oriented patterns
-            QueryType.CODE_SEARCH: [
-                "show me how", "give me an example of", "how do i", "how to",
-                "find examples", "find", "search", "locate", "where is",
-                "get", "retrieve", "fetch"
-            ],
-            QueryType.EXAMPLE: [
-                "show me examples", "give me examples", "show examples",
-                "give me example", "examples of", "example of",
-                "sample", "demo", "some examples"
-            ],
-            QueryType.RELATIONSHIP: [
-                "what functions", "show me the", "what does", "what calls",
-                "what imports", "what uses", "what are the dependencies",
-                "related to", "relationship", "connected", "belong to",
-                "methods of", "inherits", "extends", "depends on",
-                "class hierarchy", "inheritance"
-            ],
-            QueryType.EXPLANATION: [
-                "how does", "explain", "describe", "what is a", "what is the"
-            ],
-            # Lowest priority - very general patterns
-            QueryType.GENERAL: [
-                "tell me about", "what is", "what are"
-            ]
-        }
+        flattened = {}
+        
+        # Process patterns in priority order (CRITICAL -> FALLBACK)
+        for priority in sorted(self.pattern_priorities.keys(), key=lambda p: p.value):
+            for query_type, patterns in self.pattern_priorities[priority].items():
+                if query_type not in flattened:
+                    flattened[query_type] = []
+                # Add patterns, maintaining priority order
+                flattened[query_type].extend(patterns)
+        
+        return flattened
+    
+    def add_custom_pattern(self, query_type: QueryType, pattern: str, priority: PatternPriority = PatternPriority.MEDIUM):
+        """
+        Add a custom pattern at runtime.
+        
+        Args:
+            query_type: The query type this pattern should match
+            pattern: The pattern string to match
+            priority: Priority level for this pattern (default: MEDIUM)
+            
+        Example:
+            processor.add_custom_pattern(QueryType.CODE_SEARCH, "locate code for", PatternPriority.HIGH)
+        """
+        add_pattern(query_type, pattern, priority)
+        # Rebuild pattern dictionary
+        self.pattern_priorities = get_patterns_by_priority()
+        self.query_patterns = self._build_query_patterns()
+        logger.info(f"Added custom pattern '{pattern}' for {query_type.value} at {priority.name} priority")
+    
+    def add_custom_domain_term(self, term: str, category: str = "egeria_concepts"):
+        """
+        Add a custom domain term for context-aware detection.
+        
+        Args:
+            term: The domain term to add
+            category: Category for the term (default: egeria_concepts)
+            
+        Example:
+            processor.add_custom_domain_term("repository", "egeria_concepts")
+        """
+        add_domain_term(term, category)
+        self.domain_terms = get_domain_terms()
+        logger.info(f"Added custom domain term '{term}' to category '{category}'")
     
     def process(self, query: str) -> Dict[str, Any]:
         """
@@ -157,35 +158,37 @@ class QueryProcessor:
         """
         Detect the type of query using priority-based pattern matching.
         
-        Checks patterns in order of specificity:
-        1. Multi-word patterns first (more specific)
-        2. Single-word patterns last (less specific)
-        3. Returns first match found
+        Uses the extensible pattern system with special rules for edge cases.
+        Checks patterns in order of specificity (CRITICAL -> FALLBACK priority).
         """
-        # Special case: "tell me about X" where X is a specific domain term
-        # should be EXPLANATION, not GENERAL
-        if "tell me about" in query_lower:
-            # Check if it's about a specific technical concept (not general terms)
-            domain_terms = ["glossary", "collection", "asset", "governance zone",
-                          "lineage", "connection", "term", "category"]
-            if any(term in query_lower for term in domain_terms):
-                return QueryType.EXPLANATION
-            # Otherwise it's a general query about the system itself
-            return QueryType.GENERAL
+        # Apply special rules first (edge cases)
+        for rule_name, rule in self.special_rules.items():
+            if rule["pattern"] in query_lower:
+                # Check if any of the specified terms are present
+                has_term = any(term in query_lower for term in rule["check_terms"])
+                if has_term:
+                    result = rule["if_match"]
+                    if result is not None:
+                        return result
+                    # If None, continue to next rule
+                else:
+                    result = rule["if_no_match"]
+                    if result is not None:
+                        return result
+                    # If None, continue to next rule
         
-        # Special case: "how does the system work?" is GENERAL, not EXPLANATION
-        if "how does" in query_lower and "system" in query_lower:
-            return QueryType.GENERAL
+        # Process patterns by priority (CRITICAL -> FALLBACK)
+        for priority in sorted(self.pattern_priorities.keys(), key=lambda p: p.value):
+            priority_patterns = self.pattern_priorities[priority]
+            
+            for query_type, patterns in priority_patterns.items():
+                # Sort patterns by length descending (check longer patterns first)
+                sorted_patterns = sorted(patterns, key=len, reverse=True)
+                for pattern in sorted_patterns:
+                    if pattern in query_lower:
+                        return query_type
         
-        # Sort patterns by length (longer = more specific)
-        for query_type, patterns in self.query_patterns.items():
-            # Sort patterns by length descending (check longer patterns first)
-            sorted_patterns = sorted(patterns, key=len, reverse=True)
-            for pattern in sorted_patterns:
-                if pattern in query_lower:
-                    return query_type
-        
-        # Default to general
+        # Default to general if no patterns match
         return QueryType.GENERAL
     
     def detect_query_type_with_confidence(self, query: str) -> Tuple[QueryType, float]:
