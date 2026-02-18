@@ -112,6 +112,9 @@ class QueryProcessor:
         # Extract keywords
         keywords = self._extract_keywords(query)
         
+        # Extract path filter (for scoped queries)
+        path_filter = self.extract_path(query)
+        
         # Determine search strategy
         search_strategy = self._determine_search_strategy(query_type)
         
@@ -120,11 +123,15 @@ class QueryProcessor:
             "original_query": query,
             "query_type": query_type.value,
             "keywords": keywords,
+            "path_filter": path_filter,  # NEW: for scoped queries
             "search_strategy": search_strategy,
             "enhanced_query": self._enhance_query(query, keywords)
         }
         
-        logger.info(f"Processed query: type={query_type.value}, keywords={len(keywords)}")
+        log_msg = f"Processed query: type={query_type.value}, keywords={len(keywords)}"
+        if path_filter:
+            log_msg += f", path_filter={path_filter}"
+        logger.info(log_msg)
         
         return result
     

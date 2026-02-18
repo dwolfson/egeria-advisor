@@ -58,6 +58,11 @@ class EmbeddingGenerator:
 
         # Load model
         try:
+            # Force CPU mode if specified to avoid CUDA initialization issues
+            if self.device == "cpu":
+                import os
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            
             self.model = SentenceTransformer(self.model_name, device=self.device)
             self.embedding_dim = self.model.get_sentence_embedding_dimension()
             logger.info(f"Model loaded successfully. Embedding dimension: {self.embedding_dim}")
@@ -68,7 +73,21 @@ class EmbeddingGenerator:
 
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
-            raise
+            # If CUDA fails, try falling back to CPU
+            if self.device == "cuda":
+                logger.warning("CUDA initialization failed, falling back to CPU")
+                self.device = "cpu"
+                import os
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                try:
+                    self.model = SentenceTransformer(self.model_name, device="cpu")
+                    self.embedding_dim = self.model.get_sentence_embedding_dimension()
+                    logger.info(f"Model loaded successfully on CPU. Embedding dimension: {self.embedding_dim}")
+                except Exception as cpu_error:
+                    logger.error(f"Failed to load embedding model on CPU: {cpu_error}")
+                    raise
+            else:
+                raise
 
     def _test_gpu(self):
         """Test GPU functionality with a sample encoding."""
