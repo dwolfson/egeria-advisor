@@ -3,11 +3,13 @@ Ingest data from Phase 2 cache into Milvus vector store.
 
 This script reads the JSON files created by the data preparation pipeline
 and populates Milvus collections with embeddings for semantic search.
+
+Also provides CodeIngester for directly ingesting code files from repositories.
 """
 
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from loguru import logger
 import sys
 
@@ -374,3 +376,131 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+class CodeIngester:
+    """Ingest code files directly from repositories into Milvus."""
+    
+    def __init__(self, collection_name: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+        """
+        Initialize code ingester.
+        
+        Args:
+            collection_name: Name of the Milvus collection
+            chunk_size: Size of text chunks
+            chunk_overlap: Overlap between chunks
+        """
+        self.collection_name = collection_name
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.vector_store = get_vector_store()
+        self.embedding_generator = get_embedding_generator()
+        
+        logger.info(f"Initialized CodeIngester for collection: {collection_name}")
+    
+    def _chunk_text(self, text: str) -> List[str]:
+        """
+        Split text into overlapping chunks.
+        
+        Args:
+            text: Text to chunk
+            
+        Returns:
+            List of text chunks
+        """
+        if len(text) <= self.chunk_size:
+            return [text]
+        
+        chunks = []
+        start = 0
+        
+        while start < len(text):
+            end = start + self.chunk_size
+            chunk = text[start:end]
+            chunks.append(chunk)
+            start += self.chunk_size - self.chunk_overlap
+        
+        return chunks
+    
+    def ingest_file(self, file_path: Path) -> Tuple[int, int]:
+        """
+        Ingest a single file.
+        
+        Args:
+            file_path: Path to file
+            
+        Returns:
+            Tuple of (files_processed, chunks_created)
+        """
+        try:
+            # Read file content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Create chunks
+            chunks = self._chunk_text(content)
+            
+            # Prepare data
+            texts = []
+            ids = []
+            metadata = []
+            
+            for i, chunk in enumerate(chunks):
+                texts.append(chunk)
+                ids.append(f"{file_path}::chunk_{i}")
+                metadata.append({
+                    "file": str(file_path),
+                    "chunk_index": i,
+                    "total_chunks": len(chunks)
+                })
+            
+            # Insert into Milvus
+            if texts:
+                self.vector_store.insert_data(
+                    self.collection_name,
+                    texts=texts,
+                    ids=ids,
+                    metadata=metadata
+                )
+            
+            return 1, len(chunks)
+            
+        except Exception as e:
+            logger.error(f"Error ingesting {file_path}: {e}")
+            return 0, 0
+    
+    def ingest_directory(
+        self,
+        dir_path: Path,
+        file_pattern: str = "*.py",
+        recursive: bool = True
+    ) -> Tuple[int, int]:
+        """
+        Ingest all files in a directory.
+        
+        Args:
+            dir_path: Path to directory
+            file_pattern: File pattern to match
+            recursive: Search recursively
+            
+        Returns:
+            Tuple of (files_processed, chunks_created)
+        """
+        total_files = 0
+        total_chunks = 0
+        
+        # Find files
+        if recursive:
+            files = list(dir_path.rglob(file_pattern))
+        else:
+            files = list(dir_path.glob(file_pattern))
+        
+        logger.info(f"Found {len(files)} files matching {file_pattern}")
+        
+        # Ingest each file
+        for file_path in files:
+            files_processed, chunks_created = self.ingest_file(file_path)
+            total_files += files_processed
+            total_chunks += chunks_created
+        
+        return total_files, total_chunks
