@@ -103,11 +103,15 @@ class RAGSystem:
         # Handle quantitative queries directly with analytics
         if query_analysis['query_type'] == 'quantitative':
             logger.info("Handling quantitative query with analytics module")
-            response = self.analytics.answer_quantitative_query(user_query)
+            path_filter = query_analysis.get('path_filter')
+            if path_filter:
+                logger.info(f"Applying path filter: {path_filter}")
+            response = self.analytics.answer_quantitative_query(user_query, path_filter)
             return {
                 "query": user_query,
                 "response": response,
                 "query_type": "quantitative",
+                "path_filter": path_filter,
                 "sources": [],
                 "num_sources": 0,
                 "retrieval_time": 0.0,

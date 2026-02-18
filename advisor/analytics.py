@@ -25,7 +25,9 @@ class AnalyticsManager:
         """
         self.cache_dir = cache_dir or Path(settings.advisor_cache_dir)
         self.stats: Optional[Dict[str, Any]] = None
+        self.directory_stats: Optional[Dict[str, Any]] = None
         self._load_statistics()
+        self._load_directory_statistics()
     
     def _load_statistics(self):
         """Load statistics from cache."""
@@ -45,16 +47,72 @@ class AnalyticsManager:
             logger.error(f"Failed to load statistics: {e}")
             self.stats = {}
     
-    def get_total_classes(self) -> int:
-        """Get total number of classes."""
+    def _load_directory_statistics(self):
+        """Load per-directory statistics from cache."""
+        dir_stats_file = self.cache_dir / "directory_stats.json"
+        
+        if not dir_stats_file.exists():
+            logger.warning(f"Directory statistics file not found: {dir_stats_file}")
+            logger.info("Run scripts/generate_directory_stats.py to enable scoped queries")
+            self.directory_stats = {}
+            return
+        
+        try:
+            with open(dir_stats_file, 'r') as f:
+                self.directory_stats = json.load(f)
+            logger.info(f"Loaded directory statistics from {dir_stats_file}")
+            logger.info(f"Directories available: {', '.join([d for d in self.directory_stats.keys() if d != '_total'])}")
+        except Exception as e:
+            logger.error(f"Failed to load directory statistics: {e}")
+            self.directory_stats = {}
+    
+    def get_total_classes(self, path_filter: Optional[str] = None) -> int:
+        """
+        Get total number of classes, optionally filtered by path.
+        
+        Args:
+            path_filter: Optional directory path to filter by (e.g., "pyegeria")
+            
+        Returns:
+            Count of classes
+        """
+        if path_filter and self.directory_stats:
+            # Normalize path filter
+            path_filter = path_filter.lower().strip('/')
+            dir_data = self.directory_stats.get(path_filter, {})
+            return dir_data.get('classes', 0)
         return self.stats.get("code", {}).get("by_type", {}).get("class", 0)
     
-    def get_total_functions(self) -> int:
-        """Get total number of functions."""
+    def get_total_functions(self, path_filter: Optional[str] = None) -> int:
+        """
+        Get total number of functions, optionally filtered by path.
+        
+        Args:
+            path_filter: Optional directory path to filter by
+            
+        Returns:
+            Count of functions
+        """
+        if path_filter and self.directory_stats:
+            path_filter = path_filter.lower().strip('/')
+            dir_data = self.directory_stats.get(path_filter, {})
+            return dir_data.get('functions', 0)
         return self.stats.get("code", {}).get("by_type", {}).get("function", 0)
     
-    def get_total_methods(self) -> int:
-        """Get total number of methods."""
+    def get_total_methods(self, path_filter: Optional[str] = None) -> int:
+        """
+        Get total number of methods, optionally filtered by path.
+        
+        Args:
+            path_filter: Optional directory path to filter by
+            
+        Returns:
+            Count of methods
+        """
+        if path_filter and self.directory_stats:
+            path_filter = path_filter.lower().strip('/')
+            dir_data = self.directory_stats.get(path_filter, {})
+            return dir_data.get('methods', 0)
         return self.stats.get("code", {}).get("by_type", {}).get("method", 0)
     
     def get_total_code_elements(self) -> int:
@@ -135,30 +193,37 @@ class AnalyticsManager:
             }
         }
     
-    def answer_quantitative_query(self, query: str) -> str:
+    def answer_quantitative_query(self, query: str, path_filter: Optional[str] = None) -> str:
         """
         Answer a quantitative query about the codebase.
         
         Args:
             query: User's quantitative question
+            path_filter: Optional directory path to filter by (e.g., "pyegeria")
             
         Returns:
             Formatted answer with statistics
         """
         query_lower = query.lower()
         
+        # Build scope description
+        if path_filter:
+            scope = f"the **{path_filter}** directory"
+        else:
+            scope = "the egeria-python codebase"
+        
         # Detect what the user is asking about
         if "how many class" in query_lower:
-            count = self.get_total_classes()
-            return f"There are **{count:,} classes** in the egeria-python codebase."
+            count = self.get_total_classes(path_filter)
+            return f"There are **{count:,} classes** in {scope}."
         
         elif "how many function" in query_lower:
-            count = self.get_total_functions()
-            return f"There are **{count:,} functions** in the egeria-python codebase."
+            count = self.get_total_functions(path_filter)
+            return f"There are **{count:,} functions** in {scope}."
         
         elif "how many method" in query_lower:
-            count = self.get_total_methods()
-            return f"There are **{count:,} methods** in the egeria-python codebase."
+            count = self.get_total_methods(path_filter)
+            return f"There are **{count:,} methods** in {scope}."
         
         elif "how many file" in query_lower or "total file" in query_lower:
             total = self.get_total_files()

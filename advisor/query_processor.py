@@ -5,9 +5,10 @@ This module analyzes user queries to determine intent and extract
 relevant information for RAG retrieval.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from enum import Enum
 from loguru import logger
+import re
 
 
 class QueryType(Enum):
@@ -29,6 +30,20 @@ class QueryProcessor:
     def __init__(self):
         """Initialize query processor."""
         self.query_patterns = self._build_query_patterns()
+        
+        # Indicator lists for context-aware detection
+        self.quantitative_indicators = [
+            "how many", "how much", "count", "number of", "total",
+            "average", "mean", "sum", "size", "amount"
+        ]
+        self.relationship_indicators = [
+            "import", "depend", "use", "call", "inherit",
+            "extend", "implement", "reference"
+        ]
+        self.debugging_indicators = [
+            "error", "exception", "fail", "broken", "not working",
+            "doesn't work", "isn't working", "bug", "issue"
+        ]
         logger.info("Initialized query processor")
     
     def _build_query_patterns(self) -> Dict[QueryType, List[str]]:
@@ -143,6 +158,106 @@ class QueryProcessor:
                     return query_type
         
         # Default to general
+    
+    def detect_query_type_with_confidence(self, query: str) -> Tuple[QueryType, float]:
+        """
+        Detect query type with confidence score.
+        
+        Args:
+            query: User query string
+            
+        Returns:
+            Tuple of (QueryType, confidence_score)
+            confidence_score is between 0.0 and 1.0
+        """
+        query_lower = query.lower()
+        
+        # Check for context-aware indicators first
+        has_quantitative = any(ind in query_lower for ind in self.quantitative_indicators)
+        has_relationship = any(ind in query_lower for ind in self.relationship_indicators)
+        has_debugging = any(ind in query_lower for ind in self.debugging_indicators)
+        
+        # Detect base query type
+        query_type = self._detect_query_type(query_lower)
+        
+        # Calculate confidence based on context
+        confidence = self._calculate_confidence(
+            query_lower, 
+            query_type,
+            has_quantitative,
+            has_relationship,
+            has_debugging
+        )
+        
+        # Override if strong indicators present
+        if has_quantitative and query_type == QueryType.EXPLANATION:
+            query_type = QueryType.QUANTITATIVE
+            confidence = 0.85
+        elif has_relationship and query_type == QueryType.EXPLANATION:
+            query_type = QueryType.RELATIONSHIP
+            confidence = 0.85
+        elif has_debugging and query_type == QueryType.EXPLANATION:
+            query_type = QueryType.DEBUGGING
+            confidence = 0.85
+        
+        return query_type, confidence
+    
+    def _calculate_confidence(
+        self,
+        query_lower: str,
+        query_type: QueryType,
+        has_quantitative: bool,
+        has_relationship: bool,
+        has_debugging: bool
+    ) -> float:
+        """
+        Calculate confidence score for query type detection.
+        
+        Args:
+            query_lower: Normalized query string
+            query_type: Detected query type
+            has_quantitative: Whether query has quantitative indicators
+            has_relationship: Whether query has relationship indicators
+            has_debugging: Whether query has debugging indicators
+            
+        Returns:
+            Confidence score between 0.0 and 1.0
+        """
+        # Base confidence from pattern matching
+        patterns = self.query_patterns.get(query_type, [])
+        
+        # Find the longest matching pattern
+        max_pattern_length = 0
+        for pattern in patterns:
+            if pattern in query_lower:
+                max_pattern_length = max(max_pattern_length, len(pattern))
+        
+        # Longer patterns = higher confidence
+        if max_pattern_length == 0:
+            base_confidence = 0.3  # Default for GENERAL
+        elif max_pattern_length > 15:
+            base_confidence = 0.95  # Very specific pattern
+        elif max_pattern_length > 10:
+            base_confidence = 0.85  # Specific pattern
+        elif max_pattern_length > 5:
+            base_confidence = 0.75  # Moderate pattern
+        else:
+            base_confidence = 0.65  # Short pattern
+        
+        # Adjust confidence based on context indicators
+        if query_type == QueryType.QUANTITATIVE and has_quantitative:
+            base_confidence = min(1.0, base_confidence + 0.1)
+        elif query_type == QueryType.RELATIONSHIP and has_relationship:
+            base_confidence = min(1.0, base_confidence + 0.1)
+        elif query_type == QueryType.DEBUGGING and has_debugging:
+            base_confidence = min(1.0, base_confidence + 0.1)
+        
+        # Penalize conflicting indicators
+        if query_type == QueryType.EXPLANATION:
+            if has_quantitative or has_relationship or has_debugging:
+                base_confidence = max(0.4, base_confidence - 0.2)
+        
+        return base_confidence
         return QueryType.GENERAL
     
     def normalize_query(self, query: str) -> str:
@@ -193,6 +308,49 @@ class QueryProcessor:
             "has_quantitative": any(word in query_lower for word in ["how many", "count", "total", "number"]),
             "has_relationship": any(word in query_lower for word in ["calls", "uses", "imports", "inherits"]),
         }
+    
+    def extract_path(self, query: str) -> Optional[str]:
+        """
+        Extract path/directory reference from query.
+        
+        Supports patterns like:
+        - "in the pyegeria folder"
+        - "under src/utils"
+        - "within the tests directory"
+        - "from pyegeria/admin"
+        
+        Args:
+            query: User query string
+            
+        Returns:
+            Extracted path string or None if no path found
+        """
+        query_lower = query.lower()
+        
+        # Pattern 1: "in [the] X folder/directory/package/module"
+        match = re.search(r'in (?:the )?([a-z0-9_/.-]+) (?:folder|directory|package|module)', query_lower)
+        if match:
+            return match.group(1)
+        
+        # Pattern 2: "under X" or "within X"
+        match = re.search(r'(?:under|within) (?:the )?([a-z0-9_/.-]+)', query_lower)
+        if match:
+            return match.group(1)
+        
+        # Pattern 3: "from X" (when X looks like a path)
+        match = re.search(r'from (?:the )?([a-z0-9_/.-]+)', query_lower)
+        if match:
+            path = match.group(1)
+            # Only return if it looks like a path (has / or common directory names)
+            if '/' in path or path in ['src', 'tests', 'pyegeria', 'admin', 'utils', 'core']:
+                return path
+        
+        # Pattern 4: Direct path reference (contains /)
+        match = re.search(r'\b([a-z0-9_]+/[a-z0-9_/.-]+)\b', query_lower)
+        if match:
+            return match.group(1)
+        
+        return None
         return context
     
     def process_query(self, query: str) -> Dict[str, Any]:
@@ -224,6 +382,9 @@ class QueryProcessor:
         # Extract context
         context = self.extract_context(normalized)
         
+        # Extract path filter (for scoped queries)
+        path_filter = self.extract_path(query)
+        
         # Determine search strategy
         search_strategy = self._determine_search_strategy(query_type)
         
@@ -234,11 +395,15 @@ class QueryProcessor:
             "query_type": query_type,  # Return enum, not .value
             "keywords": keywords,
             "context": context,
+            "path_filter": path_filter,  # NEW: for scoped queries
             "search_strategy": search_strategy,
             "enhanced_query": self._enhance_query(normalized, keywords)
         }
         
-        logger.info(f"Processed query: type={query_type.value}, keywords={len(keywords)}")
+        log_msg = f"Processed query: type={query_type.value}, keywords={len(keywords)}"
+        if path_filter:
+            log_msg += f", path_filter={path_filter}"
+        logger.info(log_msg)
         
         return result
     
