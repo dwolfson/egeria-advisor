@@ -12,6 +12,7 @@ from loguru import logger
 from advisor.vector_store import get_vector_store
 from advisor.embeddings import get_embedding_generator
 from advisor.config import get_full_config
+from advisor.multi_collection_store import get_multi_collection_store
 
 
 class RAGRetriever:
@@ -21,7 +22,8 @@ class RAGRetriever:
         self,
         top_k: Optional[int] = None,
         min_score: Optional[float] = None,
-        max_context_length: Optional[int] = None
+        max_context_length: Optional[int] = None,
+        use_multi_collection: bool = True
     ):
         """
         Initialize RAG retriever.
@@ -30,18 +32,22 @@ class RAGRetriever:
             top_k: Number of results to retrieve
             min_score: Minimum similarity score threshold
             max_context_length: Maximum context length in characters
+            use_multi_collection: Use multi-collection search with routing
         """
         config = get_full_config()
         rag_config = config.get("rag")
 
         self.vector_store = get_vector_store()
+        self.multi_store = get_multi_collection_store() if use_multi_collection else None
         self.embedding_gen = get_embedding_generator()
+        self.use_multi_collection = use_multi_collection
 
         self.top_k = top_k or rag_config.retrieval.top_k
         self.min_score = min_score or rag_config.retrieval.min_score
         self.max_context_length = max_context_length or rag_config.context.max_length
 
-        logger.info(f"Initialized RAG retriever: top_k={self.top_k}, min_score={self.min_score}")
+        mode = "multi-collection" if use_multi_collection else "single-collection"
+        logger.info(f"Initialized RAG retriever ({mode}): top_k={self.top_k}, min_score={self.min_score}")
 
     def retrieve(
         self,
@@ -67,16 +73,37 @@ class RAGRetriever:
 
         logger.info(f"Retrieving context for query: {query[:100]}...")
 
-        # Generate query embedding
-        query_embedding = self.embedding_gen.generate_embedding(query)
+        # Use multi-collection search if enabled
+        if self.use_multi_collection and self.multi_store:
+            logger.debug("Using multi-collection search with intelligent routing")
+            
+            # Search with routing
+            multi_result = self.multi_store.search_with_routing(
+                query=query,
+                top_k=top_k,
+                min_score=min_score,
+                filters=filters
+            )
+            
+            results = multi_result.results
+            
+            # Log routing info
+            logger.info(f"Searched collections: {multi_result.collections_searched}")
+            logger.debug(f"Collection scores: {multi_result.collection_scores}")
+            
+        else:
+            logger.debug("Using single-collection search")
+            
+            # Generate query embedding
+            query_embedding = self.embedding_gen.generate_embedding(query)
 
-        # Search vector store
-        results = self.vector_store.search(
-            collection_name="code_elements",
-            query_embedding=query_embedding,
-            top_k=top_k,
-            filters=filters
-        )
+            # Search vector store
+            results = self.vector_store.search(
+                collection_name="code_elements",
+                query_embedding=query_embedding,
+                top_k=top_k,
+                filters=filters
+            )
 
         # Log scores for debugging
         if results:
@@ -84,7 +111,7 @@ class RAGRetriever:
             logger.debug(f"Result scores: {scores}")
             logger.debug(f"Min score threshold: {min_score}")
 
-        # Filter by minimum score
+        # Filter by minimum score (multi-collection already filters, but double-check)
         filtered_results = [
             r for r in results
             if r.score >= min_score
