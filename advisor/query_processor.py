@@ -58,7 +58,7 @@ class QueryProcessor:
             QueryType.QUANTITATIVE: [
                 "how many", "how much", "number of", "lines of code",
                 "count", "total", "statistics", "metrics", "size",
-                "summary", "overview"
+                "summary", "overview", "average"
             ],
             QueryType.BEST_PRACTICE: [
                 "best practice", "best way", "recommended", "should i",
@@ -69,28 +69,34 @@ class QueryProcessor:
                 "differ from", "better", "which", "choose between"
             ],
             QueryType.DEBUGGING: [
-                "not working", "isn't working", "error", "bug", "issue",
-                "problem", "fix", "debug", "troubleshoot", "getting an error"
+                "why isn't", "isn't working", "isn't this working", "not working",
+                "getting an error", "i'm getting an error",
+                "how do i fix", "troubleshoot", "fix", "debug"
             ],
             # Medium priority - action-oriented patterns
             QueryType.CODE_SEARCH: [
-                "show me how", "how do i", "how to", "find", "search",
-                "locate", "where is", "show me", "get", "retrieve", "fetch",
-                "give me"
+                "show me how", "give me an example of", "how do i", "how to",
+                "find examples", "find", "search", "locate", "where is",
+                "get", "retrieve", "fetch"
             ],
             QueryType.EXAMPLE: [
-                "show example", "give me example", "examples of", "example",
-                "sample", "demo", "how to use", "usage", "some examples"
+                "show me examples", "give me examples", "show examples",
+                "give me example", "examples of", "example of",
+                "sample", "demo", "some examples"
+            ],
+            QueryType.RELATIONSHIP: [
+                "what functions", "show me the", "what does", "what calls",
+                "what imports", "what uses", "what are the dependencies",
+                "related to", "relationship", "connected", "belong to",
+                "methods of", "inherits", "extends", "depends on",
+                "class hierarchy", "inheritance"
             ],
             QueryType.EXPLANATION: [
-                "how does", "explain", "what is", "what does", "what are",
-                "why", "describe", "tell me about"
+                "how does", "explain", "describe", "what is a", "what is the"
             ],
-            # Lower priority - relationship patterns (often overlap)
-            QueryType.RELATIONSHIP: [
-                "what calls", "what imports", "related to", "relationship",
-                "connected", "belong to", "methods of", "inherits",
-                "extends", "uses", "depends on"
+            # Lowest priority - very general patterns
+            QueryType.GENERAL: [
+                "tell me about", "what is", "what are"
             ]
         }
     
@@ -156,6 +162,21 @@ class QueryProcessor:
         2. Single-word patterns last (less specific)
         3. Returns first match found
         """
+        # Special case: "tell me about X" where X is a specific domain term
+        # should be EXPLANATION, not GENERAL
+        if "tell me about" in query_lower:
+            # Check if it's about a specific technical concept (not general terms)
+            domain_terms = ["glossary", "collection", "asset", "governance zone",
+                          "lineage", "connection", "term", "category"]
+            if any(term in query_lower for term in domain_terms):
+                return QueryType.EXPLANATION
+            # Otherwise it's a general query about the system itself
+            return QueryType.GENERAL
+        
+        # Special case: "how does the system work?" is GENERAL, not EXPLANATION
+        if "how does" in query_lower and "system" in query_lower:
+            return QueryType.GENERAL
+        
         # Sort patterns by length (longer = more specific)
         for query_type, patterns in self.query_patterns.items():
             # Sort patterns by length descending (check longer patterns first)
@@ -165,6 +186,7 @@ class QueryProcessor:
                     return query_type
         
         # Default to general
+        return QueryType.GENERAL
     
     def detect_query_type_with_confidence(self, query: str) -> Tuple[QueryType, float]:
         """
@@ -265,7 +287,6 @@ class QueryProcessor:
                 base_confidence = max(0.4, base_confidence - 0.2)
         
         return base_confidence
-        return QueryType.GENERAL
     
     def normalize_query(self, query: str) -> str:
         """
@@ -305,16 +326,40 @@ class QueryProcessor:
             query: User query string
             
         Returns:
-            Dictionary with context information
+            Dictionary with context information including modules and operations
         """
         query_lower = query.lower()
+        
+        # Extract module/component names (common Egeria modules)
+        modules = []
+        module_keywords = [
+            "glossary", "glossary_manager", "asset", "collection",
+            "term", "category", "connection", "lineage", "governance"
+        ]
+        for keyword in module_keywords:
+            if keyword in query_lower:
+                modules.append(keyword)
+        
+        # Extract operations (CRUD operations)
+        operations = []
+        operation_keywords = [
+            "create", "update", "delete", "read", "get", "set",
+            "add", "remove", "modify", "retrieve", "fetch"
+        ]
+        for keyword in operation_keywords:
+            if keyword in query_lower:
+                operations.append(keyword)
+        
         context = {
             "has_code_reference": any(word in query_lower for word in ["class", "function", "method", "def"]),
             "has_file_reference": any(word in query_lower for word in ["file", "module", "package"]),
             "has_error_reference": any(word in query_lower for word in ["error", "exception", "bug", "issue"]),
             "has_quantitative": any(word in query_lower for word in ["how many", "count", "total", "number"]),
             "has_relationship": any(word in query_lower for word in ["calls", "uses", "imports", "inherits"]),
+            "modules": modules,
+            "operations": operations
         }
+        return context
     
     def extract_path(self, query: str) -> Optional[str]:
         """
@@ -358,7 +403,6 @@ class QueryProcessor:
             return match.group(1)
         
         return None
-        return context
     
     def process_query(self, query: str) -> Dict[str, Any]:
         """
