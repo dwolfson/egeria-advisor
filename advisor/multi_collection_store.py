@@ -22,6 +22,7 @@ class MultiCollectionSearchResult:
     collection_scores: Dict[str, float] = field(default_factory=dict)
     total_searched: int = 0
     collections_searched: List[str] = field(default_factory=list)
+    routing_strategy: str = "default"
 
 
 class MultiCollectionStore:
