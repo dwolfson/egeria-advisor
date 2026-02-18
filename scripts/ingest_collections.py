@@ -165,6 +165,14 @@ def ingest_collection(
             logger.info(f"Dropping existing collection: {collection.name}")
             utility.drop_collection(collection.name)
     
+    # Create collection
+    logger.info(f"Creating collection: {collection.name}")
+    vector_store.create_collection(
+        collection_name=collection.name,
+        description=collection.description,
+        drop_if_exists=False
+    )
+    
     # Create ingester
     ingester = CodeIngester(
         collection_name=collection.name,
@@ -194,6 +202,15 @@ def ingest_collection(
                 )
                 total_files += files
                 total_chunks += chunks
+    
+    # Create index after ingestion
+    if total_chunks > 0:
+        logger.info(f"Creating index for {collection.name}...")
+        vector_store.create_index(
+            collection_name=collection.name,
+            index_type="IVF_FLAT",
+            metric_type="L2"
+        )
     
     logger.info(f"✓ Ingested {total_files} files, {total_chunks} chunks into {collection.name}")
     return total_files, total_chunks
