@@ -531,7 +531,8 @@ class CodeIngester:
                         chunk_id = f"{path_hash}::chunk_{i}"
                     batch_ids.append(chunk_id)
                     batch_metadata.append({
-                        "file": str(file_path),
+                        "file_path": str(file_path),  # Changed from "file" for consistency
+                        "collection": self.collection_name,  # Add collection name at ingestion
                         "chunk_index": i,
                         "total_chunks": len(chunks)
                     })

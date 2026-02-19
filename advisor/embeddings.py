@@ -44,12 +44,12 @@ class EmbeddingGenerator:
         self.cache_dir = cache_dir or Path(settings.advisor_cache_dir) / "embeddings"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Determine device
+        # Determine device with universal GPU detection
         if device is None:
             device = embedding_config.device
 
         if device == "auto":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = self._detect_best_device()
         else:
             self.device = device
 
@@ -58,7 +58,7 @@ class EmbeddingGenerator:
 
         # Load model
         try:
-            # Force CPU mode if specified to avoid CUDA initialization issues
+            # Force CPU mode if specified to avoid GPU initialization issues
             if self.device == "cpu":
                 import os
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -67,15 +67,15 @@ class EmbeddingGenerator:
             self.embedding_dim = self.model.get_sentence_embedding_dimension()
             logger.info(f"Model loaded successfully. Embedding dimension: {self.embedding_dim}")
 
-            # Test GPU if using CUDA
-            if self.device == "cuda":
+            # Test GPU if using any GPU device
+            if self.device in ["cuda", "mps"] or "hip" in self.device:
                 self._test_gpu()
 
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
-            # If CUDA fails, try falling back to CPU
-            if self.device == "cuda":
-                logger.warning("CUDA initialization failed, falling back to CPU")
+            # If GPU fails, try falling back to CPU
+            if self.device != "cpu":
+                logger.warning(f"{self.device.upper()} initialization failed, falling back to CPU")
                 self.device = "cpu"
                 import os
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -89,15 +89,56 @@ class EmbeddingGenerator:
             else:
                 raise
 
+    def _detect_best_device(self) -> str:
+        """
+        Detect the best available device for acceleration.
+        
+        Checks in priority order:
+        1. NVIDIA CUDA
+        2. AMD ROCm
+        3. Apple Metal (MPS)
+        4. CPU (fallback)
+        
+        Returns:
+            Device string: "cuda", "mps", "cpu", or ROCm device
+        """
+        # Check for NVIDIA CUDA
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            logger.info(f"✓ NVIDIA CUDA available: {device_name}")
+            return "cuda"
+        
+        # Check for AMD ROCm (HIP)
+        try:
+            if hasattr(torch, 'hip') and torch.hip.is_available():
+                device_count = torch.hip.device_count()
+                logger.info(f"✓ AMD ROCm available: {device_count} device(s)")
+                return "cuda"  # PyTorch uses "cuda" for ROCm too
+        except Exception as e:
+            logger.debug(f"ROCm check failed: {e}")
+        
+        # Check for Apple Metal (MPS)
+        try:
+            if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                logger.info("✓ Apple Metal (MPS) available")
+                return "mps"
+        except Exception as e:
+            logger.debug(f"MPS check failed: {e}")
+        
+        # Fallback to CPU
+        logger.info("No GPU acceleration available, using CPU")
+        return "cpu"
+
     def _test_gpu(self):
         """Test GPU functionality with a sample encoding."""
-        if self.device == "cuda":
+        device_type = "GPU" if self.device in ["cuda", "mps"] or "hip" in self.device else self.device.upper()
+        if self.device in ["cuda", "mps"] or "hip" in self.device:
             try:
-                # actually try to encode something to trigger any HIP errors
-                self.model.encode("test", device="cuda")
-                logger.info("✓ GPU encoding verified successfully")
+                # Test encoding with the actual device being used
+                self.model.encode("test", device=self.device)
+                logger.info(f"✓ {device_type} encoding verified successfully")
             except Exception as e:
-                logger.warning(f"GPU test failed ({e}), falling back to CPU")
+                logger.warning(f"{device_type} test failed ({e}), falling back to CPU")
                 self.device = "cpu"
                 self.model = SentenceTransformer(self.model_name, device="cpu")
 

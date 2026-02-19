@@ -138,6 +138,10 @@ class RAGSystem:
 
         # Get search strategy
         search_strategy = query_analysis["search_strategy"]
+        
+        # Check if we should prioritize documentation
+        prioritize_docs = query_analysis.get("prioritize_docs", False)
+        offer_examples = query_analysis.get("offer_examples", False)
 
         # Retrieve relevant context with timing
         retrieval_start = time.time()
@@ -146,7 +150,8 @@ class RAGSystem:
                 query=query_analysis["enhanced_query"],
                 top_k=search_strategy["top_k"],
                 min_score=search_strategy["min_score"],
-                format_style=search_strategy["format_style"]
+                format_style=search_strategy["format_style"],
+                prioritize_docs=prioritize_docs  # NEW: Pass documentation priority flag
             )
         else:
             context = ""
@@ -157,7 +162,8 @@ class RAGSystem:
         prompt = self._build_prompt(
             user_query=user_query,
             context=context,
-            query_type=query_analysis["query_type"]
+            query_type=query_analysis["query_type"],
+            offer_examples=offer_examples  # NEW: Include follow-up suggestion
         )
 
         # Generate response with timing
@@ -225,11 +231,27 @@ Remember: Your knowledge is LIMITED to the provided context. If it's not in the 
         self,
         user_query: str,
         context: str,
-        query_type: str
+        query_type: str,
+        offer_examples: bool = False
     ) -> str:
         """Build the complete prompt for the LLM."""
         if context:
-            prompt = f"""# CODE CONTEXT FROM EGERIA PYTHON LIBRARY
+            # Build follow-up suggestion if needed
+            followup = ""
+            if offer_examples:
+                followup = """
+
+---
+
+After answering, ask the user if they would like to see:
+- A Python code example using pyegeria
+- A Java implementation example
+- A REST API call example
+
+Format: "Would you like to see an example? I can show you: [Python/Java/REST API]"
+"""
+            
+            prompt = f"""# CODE CONTEXT FROM EGERIA LIBRARY
 
 {context}
 
@@ -242,10 +264,11 @@ Remember: Your knowledge is LIMITED to the provided context. If it's not in the 
 Answer the question using ONLY the code context above. Follow these rules:
 
 1. Use ONLY information from the context - do not add external knowledge
-2. Cite specific files, classes, and methods
+2. Cite specific files, classes, and methods from the context
 3. If showing code, make it complete with imports
 4. If the context doesn't answer the question, say so explicitly
 5. Be specific and technical - include parameter names, types, return values
+6. Focus on conceptual explanation first, then offer code examples{followup}
 
 Example good response:
 "To create a glossary, use the GlossaryManager class from pyegeria.glossary_manager.py:

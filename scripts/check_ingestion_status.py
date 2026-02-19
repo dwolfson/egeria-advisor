@@ -39,25 +39,34 @@ def check_status():
             coll = Collection(coll_name)
             
             try:
-                # Try to load collection (requires index)
-                coll.load()
+                # Get entity count first (works without index)
                 count = coll.num_entities
-                status = "✅ Indexed & Ready"
-                total_entities += count
                 
-                if coll_name in phase2_collections:
-                    phase2_status[coll_name] = ('complete', count)
+                # Try to load collection (requires index)
+                try:
+                    coll.load()
+                    status = "✅ Indexed & Ready"
+                    total_entities += count
+                    
+                    if coll_name in phase2_collections:
+                        phase2_status[coll_name] = ('complete', count)
+                except Exception as load_error:
+                    # Collection exists but no index yet (still ingesting)
+                    if "index not found" in str(load_error):
+                        status = f"🔄 Ingesting ({count:,} entities)"
+                        if coll_name in phase2_collections:
+                            phase2_status[coll_name] = ('ingesting', count)
+                    else:
+                        status = f"⚠️ No Index ({count:,} entities)"
+                        if coll_name in phase2_collections:
+                            phase2_status[coll_name] = ('no_index', count)
                     
             except Exception as e:
-                # Collection exists but no index yet (still ingesting)
-                if "index not found" in str(e):
-                    status = "🔄 Ingesting..."
-                    count = "?"
-                    if coll_name in phase2_collections:
-                        phase2_status[coll_name] = ('ingesting', 0)
-                else:
-                    status = f"❌ Error: {str(e)[:30]}"
-                    count = "?"
+                # Collection exists but can't get count
+                status = f"❌ Error: {str(e)[:30]}"
+                count = "?"
+                if coll_name in phase2_collections:
+                    phase2_status[coll_name] = ('error', 0)
             
             table.add_row(coll_name, str(count) if count != "?" else count, status)
         

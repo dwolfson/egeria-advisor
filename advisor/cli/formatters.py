@@ -97,15 +97,26 @@ class ResponseFormatter:
             if sources:
                 console.print("[bold cyan]Sources:[/bold cyan]")
                 for source in sources[:5]:  # Show top 5 sources
-                    file_path = source.get('file_path', 'Unknown')
-                    name = source.get('name', 'Unknown')
-                    score = source.get('score', 0.0)
+                    # Handle both dict and SearchResult objects
+                    if hasattr(source, 'metadata'):
+                        # SearchResult object
+                        file_path = source.metadata.get('file_path', 'Unknown')
+                        collection = source.metadata.get('collection') or source.metadata.get('_collection', 'Unknown')
+                        name = source.metadata.get('name', '')
+                        score = source.score
+                    else:
+                        # Dictionary
+                        file_path = source.get('file_path', 'Unknown')
+                        collection = source.get('collection') or source.get('_collection', 'Unknown')
+                        name = source.get('name', '')
+                        score = source.get('score', 0.0)
                     
                     # Format source line
                     source_text = Text()
                     source_text.append("  • ", style="dim")
+                    source_text.append(f"[{collection}] ", style="magenta")
                     source_text.append(f"{file_path}", style="blue")
-                    if name != 'Unknown':
+                    if name:
                         source_text.append(f": {name}", style="white")
                     if self.verbose:
                         source_text.append(f" (score: {score:.3f})", style="dim")

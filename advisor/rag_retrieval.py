@@ -224,7 +224,8 @@ class RAGRetriever:
         min_score: Optional[float] = None,
         filters: Optional[Dict[str, Any]] = None,
         format_style: str = "detailed",
-        include_metadata: bool = True
+        include_metadata: bool = True,
+        prioritize_docs: bool = False
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Retrieve and build context in one step.
@@ -236,10 +237,17 @@ class RAGRetriever:
             filters: Metadata filters
             format_style: Context format style
             include_metadata: Include metadata in context
+            prioritize_docs: Prioritize documentation collections over code
 
         Returns:
             Tuple of (formatted_context, sources_as_dicts)
         """
+        # If prioritizing docs, add collection filter for documentation
+        if prioritize_docs and self.use_multi_collection and self.multi_store:
+            logger.info("Prioritizing documentation collections for this query")
+            # The multi-collection router will handle this via domain terms
+            # We just need to pass the flag through
+        
         results = self.retrieve(
             query=query,
             top_k=top_k,

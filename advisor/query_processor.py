@@ -122,6 +122,9 @@ class QueryProcessor:
         # Extract path filter (for scoped queries)
         path_filter = self.extract_path(query)
         
+        # Determine if query should prioritize documentation
+        prioritize_docs = self._should_prioritize_docs(query_lower, query_type)
+        
         # Determine search strategy
         search_strategy = self._determine_search_strategy(query_type)
         
@@ -132,15 +135,59 @@ class QueryProcessor:
             "keywords": keywords,
             "path_filter": path_filter,  # NEW: for scoped queries
             "search_strategy": search_strategy,
-            "enhanced_query": self._enhance_query(query, keywords)
+            "enhanced_query": self._enhance_query(query, keywords),
+            "prioritize_docs": prioritize_docs,  # NEW: documentation-first flag
+            "offer_examples": prioritize_docs  # NEW: offer code examples after docs
         }
         
         log_msg = f"Processed query: type={query_type.value}, keywords={len(keywords)}"
         if path_filter:
             log_msg += f", path_filter={path_filter}"
+        if prioritize_docs:
+            log_msg += ", prioritize_docs=True"
         logger.info(log_msg)
         
         return result
+    
+    def _should_prioritize_docs(self, query_lower: str, query_type: QueryType) -> bool:
+        """
+        Determine if query should prioritize documentation over code.
+        
+        Prioritizes docs for:
+        - EXPLANATION queries (what is, how does, explain)
+        - GENERAL queries (tell me about)
+        - COMPARISON queries (difference between)
+        - BEST_PRACTICE queries (unless asking for code)
+        
+        Does NOT prioritize docs for:
+        - CODE_SEARCH queries (how do I, show me how)
+        - EXAMPLE queries (give me examples)
+        - Queries explicitly asking for code/implementation
+        
+        Args:
+            query_lower: Lowercase query string
+            query_type: Detected query type
+            
+        Returns:
+            True if should prioritize documentation
+        """
+        # Don't prioritize docs if explicitly asking for code/examples
+        code_indicators = [
+            "code", "example", "implementation", "how do i", "how to",
+            "show me how", "give me", "sample", "demo", "snippet"
+        ]
+        if any(indicator in query_lower for indicator in code_indicators):
+            return False
+        
+        # Prioritize docs for conceptual/explanation queries
+        doc_query_types = [
+            QueryType.EXPLANATION,
+            QueryType.GENERAL,
+            QueryType.COMPARISON,
+            QueryType.BEST_PRACTICE
+        ]
+        
+        return query_type in doc_query_types
     
     def detect_query_type(self, query: str) -> QueryType:
         """
