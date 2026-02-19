@@ -13,6 +13,7 @@ from advisor.vector_store import get_vector_store
 from advisor.embeddings import get_embedding_generator
 from advisor.config import get_full_config
 from advisor.multi_collection_store import get_multi_collection_store
+from advisor.query_cache import get_query_cache
 
 
 class RAGRetriever:
@@ -23,7 +24,8 @@ class RAGRetriever:
         top_k: Optional[int] = None,
         min_score: Optional[float] = None,
         max_context_length: Optional[int] = None,
-        use_multi_collection: bool = True
+        use_multi_collection: bool = True,
+        enable_cache: bool = True
     ):
         """
         Initialize RAG retriever.
@@ -33,6 +35,7 @@ class RAGRetriever:
             min_score: Minimum similarity score threshold
             max_context_length: Maximum context length in characters
             use_multi_collection: Use multi-collection search with routing
+            enable_cache: Enable query result caching
         """
         config = get_full_config()
         rag_config = config.get("rag")
@@ -41,13 +44,16 @@ class RAGRetriever:
         self.multi_store = get_multi_collection_store() if use_multi_collection else None
         self.embedding_gen = get_embedding_generator()
         self.use_multi_collection = use_multi_collection
+        self.enable_cache = enable_cache
+        self.cache = get_query_cache() if enable_cache else None
 
         self.top_k = top_k or rag_config.retrieval.top_k
         self.min_score = min_score or rag_config.retrieval.min_score
         self.max_context_length = max_context_length or rag_config.context.max_length
 
         mode = "multi-collection" if use_multi_collection else "single-collection"
-        logger.info(f"Initialized RAG retriever ({mode}): top_k={self.top_k}, min_score={self.min_score}")
+        cache_status = "with caching" if enable_cache else "no cache"
+        logger.info(f"Initialized RAG retriever ({mode}, {cache_status}): top_k={self.top_k}, min_score={self.min_score}")
 
     def retrieve(
         self,
@@ -72,6 +78,18 @@ class RAGRetriever:
         min_score = min_score or self.min_score
 
         logger.info(f"Retrieving context for query: {query[:100]}...")
+
+        # Check cache first
+        if self.enable_cache and self.cache:
+            cached_results = self.cache.get(
+                query,
+                top_k=top_k,
+                min_score=min_score,
+                use_multi=self.use_multi_collection
+            )
+            if cached_results is not None:
+                logger.info(f"Retrieved {len(cached_results)} results from cache")
+                return cached_results
 
         # Use multi-collection search if enabled
         if self.use_multi_collection and self.multi_store:
@@ -118,6 +136,16 @@ class RAGRetriever:
         ]
 
         logger.info(f"Retrieved {len(filtered_results)} results (filtered from {len(results)})")
+
+        # Cache the results for future queries
+        if self.enable_cache and self.cache and filtered_results:
+            self.cache.set(
+                query,
+                filtered_results,
+                top_k=top_k,
+                min_score=min_score,
+                use_multi=self.use_multi_collection
+            )
 
         return filtered_results
 

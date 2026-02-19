@@ -103,12 +103,14 @@ class ResponseFormatter:
                         file_path = source.metadata.get('file_path', 'Unknown')
                         collection = source.metadata.get('collection') or source.metadata.get('_collection', 'Unknown')
                         name = source.metadata.get('name', '')
+                        element_type = source.metadata.get('type', source.metadata.get('element_type', ''))
                         score = source.score
                     else:
                         # Dictionary
                         file_path = source.get('file_path', 'Unknown')
                         collection = source.get('collection') or source.get('_collection', 'Unknown')
                         name = source.get('name', '')
+                        element_type = source.get('type', source.get('element_type', ''))
                         score = source.get('score', 0.0)
                     
                     # Format source line
@@ -116,8 +118,15 @@ class ResponseFormatter:
                     source_text.append("  • ", style="dim")
                     source_text.append(f"[{collection}] ", style="magenta")
                     source_text.append(f"{file_path}", style="blue")
+                    
+                    # Show name if available, otherwise show element type or "text chunk"
                     if name:
                         source_text.append(f": {name}", style="white")
+                    elif element_type:
+                        source_text.append(f": {element_type}", style="yellow")
+                    else:
+                        source_text.append(": text chunk", style="dim")
+                    
                     if self.verbose:
                         source_text.append(f" (score: {score:.3f})", style="dim")
                     

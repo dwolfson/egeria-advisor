@@ -7,6 +7,7 @@ collections with result merging and re-ranking.
 
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
 import math
 
@@ -74,11 +75,12 @@ class MultiCollectionStore:
         
         logger.info(f"Routing query to collections: {collection_names}")
         
-        # Search each collection
+        # Search collections in parallel for better performance
         all_results: List[Tuple[str, SearchResult]] = []  # (collection_name, result)
         collection_scores: Dict[str, float] = {}
         
-        for collection_name in collection_names:
+        def search_collection(collection_name: str) -> Tuple[str, List[SearchResult]]:
+            """Search a single collection (for parallel execution)."""
             try:
                 results = self.vector_store.search(
                     collection_name=collection_name,
@@ -86,6 +88,22 @@ class MultiCollectionStore:
                     top_k=top_k,
                     filters=filters
                 )
+                return (collection_name, results)
+            except Exception as e:
+                logger.error(f"Error searching collection {collection_name}: {e}")
+                return (collection_name, [])
+        
+        # Execute searches in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(collection_names), 4)) as executor:
+            # Submit all search tasks
+            future_to_collection = {
+                executor.submit(search_collection, name): name
+                for name in collection_names
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_collection):
+                collection_name, results = future.result()
                 
                 # Track results per collection
                 for result in results:
@@ -97,10 +115,6 @@ class MultiCollectionStore:
                     avg_score = sum(r.score for r in results) / len(results)
                     collection_scores[collection_name] = avg_score
                     logger.debug(f"Collection {collection_name}: {len(results)} results, avg score: {avg_score:.3f}")
-                
-            except Exception as e:
-                logger.error(f"Error searching collection {collection_name}: {e}")
-                continue
         
         # Merge and re-rank results
         merged_results = self._merge_and_rerank(

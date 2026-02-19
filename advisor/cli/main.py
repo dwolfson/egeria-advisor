@@ -17,6 +17,7 @@ from loguru import logger
 from advisor.rag_system import get_rag_system
 from advisor.cli.formatters import ResponseFormatter
 from advisor.cli.interactive import InteractiveSession
+from advisor.cli.agent_session import AgentInteractiveSession
 
 console = Console()
 
@@ -64,6 +65,11 @@ console = Console()
     is_flag=True,
     help='Show debug/trace messages (loguru INFO level)'
 )
+@click.option(
+    '--agent', '-a',
+    is_flag=True,
+    help='Use conversational agent mode (with conversation history)'
+)
 @click.version_option(version='0.1.0', prog_name='egeria-advisor')
 def cli(
     query: Optional[str],
@@ -74,7 +80,8 @@ def cli(
     no_color: bool,
     verbose: bool,
     track: bool,
-    debug: bool
+    debug: bool,
+    agent: bool
 ):
     """
     Egeria Advisor - AI-powered assistance for pyegeria
@@ -121,6 +128,7 @@ def cli(
         'verbose': verbose,
         'track_metrics': track,
         'debug': debug,
+        'agent_mode': agent,
     }
     
     try:
@@ -241,7 +249,31 @@ def start_interactive(options: dict):
         CLI options
     """
     verbose = options.get('verbose', False)
+    agent_mode = options.get('agent_mode', False)
     
+    # Use agent mode if requested
+    if agent_mode:
+        # Show welcome banner for agent mode
+        console.print(Panel(
+            "[bold cyan]Egeria Advisor - Agent Mode[/bold cyan]\n\n"
+            "Conversational AI assistant with memory and context awareness.\n\n"
+            "[dim]Commands:[/dim]\n"
+            "  [cyan]/help[/cyan]     - Show help\n"
+            "  [cyan]/clear[/cyan]    - Clear conversation history\n"
+            "  [cyan]/history[/cyan]  - Show conversation history\n"
+            "  [cyan]/stats[/cyan]    - Show agent statistics\n"
+            "  [cyan]/exit[/cyan]     - Exit (or Ctrl+D)\n\n"
+            "[dim]Type your question and press Enter[/dim]",
+            border_style="cyan"
+        ))
+        console.print()
+        
+        # Start agent session
+        session = AgentInteractiveSession(options, console)
+        session.run()
+        return
+    
+    # Standard RAG mode
     # Show welcome banner
     console.print(Panel(
         "[bold cyan]Egeria Advisor - Interactive Mode[/bold cyan]\n\n"

@@ -52,7 +52,7 @@ llm:
 
 embeddings:
   model: sentence-transformers/all-MiniLM-L6-v2
-  device: cuda
+  device: auto  # Auto-detect best device: CUDA, ROCm (AMD), MPS (Apple), or CPU
   batch_size: 64
   normalize: true
   max_length: 512

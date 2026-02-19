@@ -1,0 +1,531 @@
+"""
+Incremental indexing system for efficient vector store updates.
+
+This module provides functionality to detect file changes and update
+only modified content in the vector store, avoiding full re-indexing.
+"""
+
+import sqlite3
+import hashlib
+import json
+import time
+from pathlib import Path
+from typing import List, Dict, Set, Tuple, Optional, NamedTuple
+from dataclasses import dataclass
+from loguru import logger
+
+from advisor.config import get_full_config
+from advisor.vector_store import get_vector_store
+from advisor.embeddings import get_embedding_generator
+from advisor.ingest_to_milvus import CodeIngester
+from advisor.mlflow_tracking import track_operation
+
+
+class FileChange(NamedTuple):
+    """Represents a detected file change."""
+    path: Path
+    change_type: str  # 'new', 'modified', 'deleted'
+    old_hash: Optional[str] = None
+    new_hash: Optional[str] = None
+
+
+@dataclass
+class ChangeSet:
+    """Collection of detected changes."""
+    new_files: List[Path]
+    modified_files: List[Path]
+    deleted_files: List[Path]
+    unchanged_files: List[Path]
+    
+    @property
+    def total_changes(self) -> int:
+        """Total number of changes."""
+        return len(self.new_files) + len(self.modified_files) + len(self.deleted_files)
+    
+    @property
+    def has_changes(self) -> bool:
+        """Whether any changes were detected."""
+        return self.total_changes > 0
+
+
+@dataclass
+class UpdateResult:
+    """Result of an incremental update operation."""
+    files_added: int
+    files_modified: int
+    files_deleted: int
+    chunks_added: int
+    chunks_removed: int
+    duration: float
+    success: bool
+    error: Optional[str] = None
+
+
+class FileTracker:
+    """
+    Track file states and detect changes using SQLite.
+    
+    Maintains a database of indexed files with their modification times,
+    content hashes, and associated Milvus entity IDs.
+    """
+    
+    def __init__(self, db_path: Path):
+        """
+        Initialize file tracker.
+        
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_database()
+    
+    def _init_database(self):
+        """Initialize database schema."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS indexed_files (
+                    file_path TEXT PRIMARY KEY,
+                    collection_name TEXT NOT NULL,
+                    last_modified REAL NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    last_indexed REAL NOT NULL,
+                    chunk_count INTEGER NOT NULL,
+                    entity_ids TEXT NOT NULL
+                )
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS index_metadata (
+                    collection_name TEXT PRIMARY KEY,
+                    last_full_index REAL NOT NULL,
+                    total_files INTEGER NOT NULL,
+                    total_chunks INTEGER NOT NULL
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_collection 
+                ON indexed_files(collection_name)
+            """)
+            
+            conn.commit()
+    
+    def compute_file_hash(self, file_path: Path) -> str:
+        """
+        Compute SHA256 hash of file content.
+        
+        Args:
+            file_path: Path to file
+            
+        Returns:
+            Hex digest of file hash
+        """
+        hasher = hashlib.sha256()
+        try:
+            with open(file_path, 'rb') as f:
+                # Read in chunks for large files
+                for chunk in iter(lambda: f.read(8192), b''):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception as e:
+            logger.warning(f"Failed to hash {file_path}: {e}")
+            return ""
+    
+    def get_tracked_file(self, file_path: str, collection_name: str) -> Optional[Dict]:
+        """
+        Get tracked file information.
+        
+        Args:
+            file_path: File path (relative or absolute)
+            collection_name: Collection name
+            
+        Returns:
+            Dict with file info or None if not tracked
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM indexed_files WHERE file_path = ? AND collection_name = ?",
+                (str(file_path), collection_name)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    
+    def track_file(
+        self,
+        file_path: Path,
+        collection_name: str,
+        content_hash: str,
+        chunk_count: int,
+        entity_ids: List[int]
+    ):
+        """
+        Track a file in the database.
+        
+        Args:
+            file_path: Path to file
+            collection_name: Collection name
+            content_hash: Content hash
+            chunk_count: Number of chunks created
+            entity_ids: List of Milvus entity IDs
+        """
+        now = time.time()
+        mtime = file_path.stat().st_mtime
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO indexed_files
+                (file_path, collection_name, last_modified, content_hash, 
+                 last_indexed, chunk_count, entity_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(file_path),
+                collection_name,
+                mtime,
+                content_hash,
+                now,
+                chunk_count,
+                json.dumps(entity_ids)
+            ))
+            conn.commit()
+    
+    def untrack_file(self, file_path: str, collection_name: str) -> Optional[List[int]]:
+        """
+        Remove file from tracking and return its entity IDs.
+        
+        Args:
+            file_path: File path
+            collection_name: Collection name
+            
+        Returns:
+            List of entity IDs or None if not tracked
+        """
+        tracked = self.get_tracked_file(file_path, collection_name)
+        if not tracked:
+            return None
+        
+        entity_ids = json.loads(tracked['entity_ids'])
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM indexed_files WHERE file_path = ? AND collection_name = ?",
+                (file_path, collection_name)
+            )
+            conn.commit()
+        
+        return entity_ids
+    
+    def get_tracked_files(self, collection_name: str) -> Dict[str, Dict]:
+        """
+        Get all tracked files for a collection.
+        
+        Args:
+            collection_name: Collection name
+            
+        Returns:
+            Dict mapping file paths to file info
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM indexed_files WHERE collection_name = ?",
+                (collection_name,)
+            )
+            return {row['file_path']: dict(row) for row in cursor.fetchall()}
+    
+    def update_metadata(self, collection_name: str, total_files: int, total_chunks: int):
+        """
+        Update collection metadata.
+        
+        Args:
+            collection_name: Collection name
+            total_files: Total number of files
+            total_chunks: Total number of chunks
+        """
+        now = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO index_metadata
+                (collection_name, last_full_index, total_files, total_chunks)
+                VALUES (?, ?, ?, ?)
+            """, (collection_name, now, total_files, total_chunks))
+            conn.commit()
+    
+    def get_metadata(self, collection_name: str) -> Optional[Dict]:
+        """
+        Get collection metadata.
+        
+        Args:
+            collection_name: Collection name
+            
+        Returns:
+            Dict with metadata or None
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM index_metadata WHERE collection_name = ?",
+                (collection_name,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
+class IncrementalIndexer:
+    """
+    Manage incremental indexing for a collection.
+    
+    Detects file changes and updates only modified content in the vector store.
+    """
+    
+    def __init__(
+        self,
+        collection_name: str,
+        source_paths: List[Path],
+        file_patterns: List[str],
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200
+    ):
+        """
+        Initialize incremental indexer.
+        
+        Args:
+            collection_name: Name of Milvus collection
+            source_paths: List of source directories/files
+            file_patterns: List of file patterns to match (e.g., ["*.py"])
+            chunk_size: Size of text chunks
+            chunk_overlap: Overlap between chunks
+        """
+        self.collection_name = collection_name
+        self.source_paths = source_paths
+        self.file_patterns = file_patterns
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        
+        # Initialize components
+        config = get_full_config()
+        db_path = Path(config.get("data_dir", "data")) / "index_state.db"
+        self.tracker = FileTracker(db_path)
+        self.vector_store = get_vector_store()
+        self.embedding_generator = get_embedding_generator()
+        self.ingester = CodeIngester(
+            collection_name=collection_name,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+        
+        logger.info(f"Initialized IncrementalIndexer for {collection_name}")
+    
+    def _find_files(self) -> Set[Path]:
+        """
+        Find all files matching patterns in source paths.
+        
+        Returns:
+            Set of file paths
+        """
+        import fnmatch
+        
+        files = set()
+        for source_path in self.source_paths:
+            if source_path.is_file():
+                files.add(source_path)
+            elif source_path.is_dir():
+                for pattern in self.file_patterns:
+                    try:
+                        files.update(source_path.rglob(pattern))
+                    except (PermissionError, OSError) as e:
+                        logger.warning(f"Skipping inaccessible path {source_path}: {e}")
+        
+        return files
+    
+    def detect_changes(self) -> ChangeSet:
+        """
+        Detect file changes since last index.
+        
+        Returns:
+            ChangeSet with categorized changes
+        """
+        logger.info(f"Detecting changes for {self.collection_name}...")
+        
+        # Get current files
+        current_files = self._find_files()
+        logger.info(f"Found {len(current_files)} current files")
+        
+        # Get tracked files
+        tracked = self.tracker.get_tracked_files(self.collection_name)
+        tracked_paths = set(Path(p) for p in tracked.keys())
+        logger.info(f"Tracking {len(tracked_paths)} files")
+        
+        # Categorize changes
+        new_files = []
+        modified_files = []
+        deleted_files = []
+        unchanged_files = []
+        
+        # Check current files
+        for file_path in current_files:
+            if file_path not in tracked_paths:
+                # New file
+                new_files.append(file_path)
+            else:
+                # Check if modified
+                tracked_info = tracked[str(file_path)]
+                current_mtime = file_path.stat().st_mtime
+                tracked_mtime = tracked_info['last_modified']
+                
+                if current_mtime > tracked_mtime:
+                    # File modified - verify with hash
+                    current_hash = self.tracker.compute_file_hash(file_path)
+                    if current_hash != tracked_info['content_hash']:
+                        modified_files.append(file_path)
+                    else:
+                        unchanged_files.append(file_path)
+                else:
+                    unchanged_files.append(file_path)
+        
+        # Check for deleted files
+        for tracked_path in tracked_paths:
+            if tracked_path not in current_files:
+                deleted_files.append(tracked_path)
+        
+        changeset = ChangeSet(
+            new_files=new_files,
+            modified_files=modified_files,
+            deleted_files=deleted_files,
+            unchanged_files=unchanged_files
+        )
+        
+        logger.info(f"Changes detected: {len(new_files)} new, "
+                   f"{len(modified_files)} modified, {len(deleted_files)} deleted, "
+                   f"{len(unchanged_files)} unchanged")
+        
+        return changeset
+    
+    def apply_updates(self, changeset: ChangeSet, dry_run: bool = False) -> UpdateResult:
+        """
+        Apply incremental updates to the vector store.
+        
+        Args:
+            changeset: Detected changes
+            dry_run: If True, don't actually update
+            
+        Returns:
+            UpdateResult with operation statistics
+        """
+        start_time = time.time()
+        
+        if dry_run:
+            logger.info("DRY RUN - No actual updates will be performed")
+            return UpdateResult(
+                files_added=len(changeset.new_files),
+                files_modified=len(changeset.modified_files),
+                files_deleted=len(changeset.deleted_files),
+                chunks_added=0,
+                chunks_removed=0,
+                duration=0,
+                success=True
+            )
+        
+        params = {
+            "collection": self.collection_name,
+            "new_files": len(changeset.new_files),
+            "modified_files": len(changeset.modified_files),
+            "deleted_files": len(changeset.deleted_files),
+            "total_changes": changeset.total_changes
+        }
+        
+        try:
+            with track_operation(f"incremental_update_{self.collection_name}", params=params) as tracker:
+                chunks_added = 0
+                chunks_removed = 0
+                
+                # Process deleted files
+                for file_path in changeset.deleted_files:
+                    entity_ids = self.tracker.untrack_file(str(file_path), self.collection_name)
+                    if entity_ids:
+                        # Delete entities from Milvus
+                        self.vector_store.delete_entities(self.collection_name, entity_ids)
+                        chunks_removed += len(entity_ids)
+                        logger.info(f"Deleted {len(entity_ids)} chunks for {file_path}")
+                
+                # Process modified files (delete old, add new)
+                for file_path in changeset.modified_files:
+                    # Delete old entities
+                    entity_ids = self.tracker.untrack_file(str(file_path), self.collection_name)
+                    if entity_ids:
+                        self.vector_store.delete_entities(self.collection_name, entity_ids)
+                        chunks_removed += len(entity_ids)
+                    
+                    # Ingest new version
+                    files, chunks = self.ingester.ingest_file(file_path)
+                    if files > 0:
+                        # Track the file (ingester should provide entity IDs)
+                        content_hash = self.tracker.compute_file_hash(file_path)
+                        # Note: We need to get entity IDs from ingester
+                        # For now, track with empty list - will enhance ingester
+                        self.tracker.track_file(
+                            file_path,
+                            self.collection_name,
+                            content_hash,
+                            chunks,
+                            []  # TODO: Get actual entity IDs from ingester
+                        )
+                        chunks_added += chunks
+                        logger.info(f"Updated {chunks} chunks for {file_path}")
+                
+                # Process new files
+                for file_path in changeset.new_files:
+                    files, chunks = self.ingester.ingest_file(file_path)
+                    if files > 0:
+                        content_hash = self.tracker.compute_file_hash(file_path)
+                        self.tracker.track_file(
+                            file_path,
+                            self.collection_name,
+                            content_hash,
+                            chunks,
+                            []  # TODO: Get actual entity IDs from ingester
+                        )
+                        chunks_added += chunks
+                        logger.info(f"Added {chunks} chunks for {file_path}")
+                
+                duration = time.time() - start_time
+                
+                # Update metadata
+                total_files = len(changeset.new_files) + len(changeset.modified_files) + len(changeset.unchanged_files)
+                self.tracker.update_metadata(self.collection_name, total_files, chunks_added - chunks_removed)
+                
+                # Track metrics
+                tracker.log_metrics({
+                    "files_added": len(changeset.new_files),
+                    "files_modified": len(changeset.modified_files),
+                    "files_deleted": len(changeset.deleted_files),
+                    "chunks_added": chunks_added,
+                    "chunks_removed": chunks_removed,
+                    "duration_seconds": duration
+                })
+                
+                logger.info(f"Incremental update complete: +{chunks_added} -{chunks_removed} chunks in {duration:.2f}s")
+                
+                return UpdateResult(
+                    files_added=len(changeset.new_files),
+                    files_modified=len(changeset.modified_files),
+                    files_deleted=len(changeset.deleted_files),
+                    chunks_added=chunks_added,
+                    chunks_removed=chunks_removed,
+                    duration=duration,
+                    success=True
+                )
+        
+        except Exception as e:
+            logger.error(f"Incremental update failed: {e}")
+            return UpdateResult(
+                files_added=0,
+                files_modified=0,
+                files_deleted=0,
+                chunks_added=0,
+                chunks_removed=0,
+                duration=time.time() - start_time,
+                success=False,
+                error=str(e)
+            )
