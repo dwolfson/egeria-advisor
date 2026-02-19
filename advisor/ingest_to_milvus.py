@@ -8,6 +8,7 @@ Also provides CodeIngester for directly ingesting code files from repositories.
 """
 
 import json
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 from loguru import logger
@@ -473,15 +474,17 @@ class CodeIngester:
         self,
         dir_path: Path,
         file_pattern: str = "*.py",
-        recursive: bool = True
+        recursive: bool = True,
+        batch_size: int = 50
     ) -> Tuple[int, int]:
         """
-        Ingest all files in a directory.
+        Ingest all files in a directory with batching for performance.
         
         Args:
             dir_path: Path to directory
             file_pattern: File pattern to match
             recursive: Search recursively
+            batch_size: Number of files to batch before inserting
             
         Returns:
             Tuple of (files_processed, chunks_created)
@@ -490,17 +493,71 @@ class CodeIngester:
         total_chunks = 0
         
         # Find files
-        if recursive:
-            files = list(dir_path.rglob(file_pattern))
-        else:
-            files = list(dir_path.glob(file_pattern))
+        files = []
+        try:
+            if recursive:
+                files = list(dir_path.rglob(file_pattern))
+            else:
+                files = list(dir_path.glob(file_pattern))
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Permission error accessing {dir_path}: {e}")
+            logger.warning("Continuing with accessible files only")
         
         logger.info(f"Found {len(files)} files matching {file_pattern}")
         
-        # Ingest each file
-        for file_path in files:
-            files_processed, chunks_created = self.ingest_file(file_path)
-            total_files += files_processed
-            total_chunks += chunks_created
+        # Batch processing for better performance
+        batch_texts = []
+        batch_ids = []
+        batch_metadata = []
+        files_in_batch = 0
+        
+        for idx, file_path in enumerate(files, 1):
+            try:
+                # Read file content
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Create chunks
+                chunks = self._chunk_text(content)
+                
+                # Add to batch
+                for i, chunk in enumerate(chunks):
+                    batch_texts.append(chunk)
+                    # Generate ID with hash if path is too long (Milvus limit: 256 chars)
+                    chunk_id = f"{file_path}::chunk_{i}"
+                    if len(chunk_id) > 250:  # Leave margin for safety
+                        # Use hash of path + chunk index
+                        path_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:16]
+                        chunk_id = f"{path_hash}::chunk_{i}"
+                    batch_ids.append(chunk_id)
+                    batch_metadata.append({
+                        "file": str(file_path),
+                        "chunk_index": i,
+                        "total_chunks": len(chunks)
+                    })
+                
+                files_in_batch += 1
+                total_files += 1
+                total_chunks += len(chunks)
+                
+                # Insert batch when it reaches batch_size or at the end
+                if files_in_batch >= batch_size or idx == len(files):
+                    if batch_texts:
+                        logger.info(f"Inserting batch: {files_in_batch} files, {len(batch_texts)} chunks (progress: {idx}/{len(files)})")
+                        self.vector_store.insert_data(
+                            self.collection_name,
+                            texts=batch_texts,
+                            ids=batch_ids,
+                            metadata=batch_metadata
+                        )
+                        # Reset batch
+                        batch_texts = []
+                        batch_ids = []
+                        batch_metadata = []
+                        files_in_batch = 0
+                
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {e}")
+                continue
         
         return total_files, total_chunks

@@ -131,7 +131,7 @@ EGERIA_JAVA_COLLECTION = CollectionMetadata(
     name="egeria_java",
     description="Egeria Java codebase - OMAS, OMAG, OMRS services",
     source_repo="https://github.com/odpi/egeria.git",
-    source_paths=["/"],
+    source_paths=["."],
     content_type=ContentType.CODE,
     language=Language.JAVA,
     domain_terms=[
@@ -144,14 +144,14 @@ EGERIA_JAVA_COLLECTION = CollectionMetadata(
     include_patterns=["*.java", "*.md"],
     exclude_patterns=["**/target/**", "**/build/**", "**/.gradle/**"],
     priority=7,
-    enabled=False  # Phase 2
+    enabled=True  # Phase 2 - ENABLED
 )
 
 EGERIA_DOCS_COLLECTION = CollectionMetadata(
     name="egeria_docs",
     description="Egeria documentation - guides, tutorials, concepts",
     source_repo="https://github.com/odpi/egeria-docs.git",
-    source_paths=["/"],
+    source_paths=["."],
     content_type=ContentType.DOCUMENTATION,
     language=Language.MARKDOWN,
     domain_terms=[
@@ -162,14 +162,14 @@ EGERIA_DOCS_COLLECTION = CollectionMetadata(
     include_patterns=["*.md", "*.rst"],
     exclude_patterns=["**/node_modules/**", "**/.git/**"],
     priority=6,
-    enabled=False  # Phase 2
+    enabled=True  # Phase 2 - ENABLED
 )
 
 EGERIA_WORKSPACES_COLLECTION = CollectionMetadata(
     name="egeria_workspaces",
     description="Egeria workspaces - Jupyter notebooks, deployment configs, examples",
     source_repo="https://github.com/odpi/egeria-workspaces.git",
-    source_paths=["/"],
+    source_paths=["."],
     content_type=ContentType.EXAMPLES,
     language=Language.MIXED,
     domain_terms=[
@@ -180,7 +180,7 @@ EGERIA_WORKSPACES_COLLECTION = CollectionMetadata(
     include_patterns=["*.ipynb", "*.py", "*.md", "*.yaml", "*.yml"],
     exclude_patterns=["**/node_modules/**", "**/.git/**", "**/venv/**"],
     priority=5,
-    enabled=False  # Phase 2
+    enabled=True  # Phase 2 - ENABLED
 )
 
 

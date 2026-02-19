@@ -110,7 +110,11 @@ def count_files(paths: List[Path], patterns: List[str]) -> int:
                     break
         elif path.is_dir():
             for pattern in patterns:
-                count += len(list(path.rglob(pattern)))
+                try:
+                    count += len(list(path.rglob(pattern)))
+                except (PermissionError, OSError) as e:
+                    logger.warning(f"Skipping inaccessible path {path}: {e}")
+                    continue
     return count
 
 
