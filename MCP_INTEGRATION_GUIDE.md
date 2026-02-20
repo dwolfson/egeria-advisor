@@ -472,6 +472,165 @@ User Query → Query Analysis → RAG Search → LLM with Tools
                                     Generate Final Response
 ```
 
+
+## MCP Server Development Guide
+
+### Adding Enum Support to Tool Parameters
+
+The Egeria Advisor CLI displays enum values to users when they're defined in the tool schema. This improves user experience by showing valid options.
+
+#### What You Need to Do
+
+**Simply add the `enum` field to your tool parameter schema.** No additional logic or validation code is needed!
+
+#### Example: Before and After
+
+**Before (without enum):**
+```python
+# In your MCP server tool definition
+{
+    "name": "describe_report",
+    "description": "Describe a report specification",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "output_type": {
+                "type": "string",
+                "title": "Output Type",
+                "description": "Format for the output",
+                "default": "DICT"
+            }
+        },
+        "required": ["output_type"]
+    }
+}
+```
+
+**After (with enum):**
+```python
+# In your MCP server tool definition
+{
+    "name": "describe_report",
+    "description": "Describe a report specification",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "output_type": {
+                "type": "string",
+                "title": "Output Type",
+                "description": "Format for the output",
+                "default": "DICT",
+                "enum": ["DICT", "JSON", "MARKDOWN"]  # ← Add this line
+            }
+        },
+        "required": ["output_type"]
+    }
+}
+```
+
+#### What Happens in the CLI
+
+**Without enum:**
+```
+* output_type (string)
+  Format for the output
+  Default: DICT
+  Value: _
+```
+
+**With enum:**
+```
+* output_type (string)
+  Format for the output
+  Valid values: DICT, JSON, MARKDOWN
+  Default: DICT
+  Value: _
+```
+
+#### Why No Validation Code is Needed
+
+The `enum` field is **pure metadata** for the JSON Schema:
+
+1. **JSON Schema validators** (if you use them) automatically validate against enum
+2. **The CLI** shows users the valid options, reducing invalid inputs
+3. **Your existing code** that handles the parameter works exactly the same
+
+#### Complete Example for PyEgeria MCP Server
+
+```python
+def get_tool_schema():
+    """Return tool schema with enum support."""
+    return {
+        "name": "run_report",
+        "description": "Run a report specification",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "report_spec": {
+                    "type": "string",
+                    "title": "Report Specification",
+                    "description": "The name of the report specification to run"
+                },
+                "output_type": {
+                    "type": "string",
+                    "title": "Output Type",
+                    "description": "Format for the output",
+                    "default": "DICT",
+                    "enum": ["DICT", "JSON", "MARKDOWN"]  # Add enum here
+                },
+                "max_results": {
+                    "type": "integer",
+                    "title": "Max Results",
+                    "description": "Maximum number of results to return",
+                    "default": 100,
+                    "enum": [10, 50, 100, 500, 1000]  # Enum works for integers too
+                }
+            },
+            "required": ["report_spec"]
+        }
+    }
+
+# Your existing tool implementation doesn't change!
+def run_report(report_spec: str, output_type: str = "DICT", max_results: int = 100):
+    """Run the report - no changes needed here."""
+    if output_type == "DICT":
+        return generate_dict_output(report_spec, max_results)
+    elif output_type == "JSON":
+        return generate_json_output(report_spec, max_results)
+    elif output_type == "MARKDOWN":
+        return generate_markdown_output(report_spec, max_results)
+```
+
+#### Benefits
+
+✅ **Better UX**: Users see valid options  
+✅ **Self-documenting**: Schema shows what's allowed  
+✅ **No code changes**: Your existing logic stays the same  
+✅ **Standard JSON Schema**: Follows JSON Schema specification  
+✅ **Reduces errors**: Users less likely to enter invalid values  
+
+#### When to Use Enum
+
+Use `enum` when a parameter has:
+- A fixed set of valid values
+- Predefined options (like output formats)
+- Limited choices (like priority levels: "low", "medium", "high")
+- Configuration options (like "enabled", "disabled")
+
+**Don't use enum when:**
+- Values are dynamic or user-generated (like report names)
+- There are too many options (like all possible GUIDs)
+- Values are free-form text
+
+#### Testing Your Changes
+
+After adding enum to your tool schema:
+
+1. Restart your MCP server
+2. Start the Egeria Advisor CLI: `egeria-advisor --agent --interactive`
+3. Execute your tool: `/execute your_tool_name`
+4. Verify that enum values are displayed in the parameter prompt
+
 ## PyEgeria MCP Server
 
 The pyegeria MCP server provides tools for:
