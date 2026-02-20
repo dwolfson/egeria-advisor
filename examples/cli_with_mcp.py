@@ -11,12 +11,64 @@ Example usage:
 import asyncio
 import argparse
 import sys
+import json
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from advisor.mcp_agent import initialize_mcp_agent, shutdown_mcp_agent, MCPError
+
+
+def pretty_print_result(result):
+    """
+    Pretty print tool result - handles both JSON and Markdown.
+    
+    Args:
+        result: Tool execution result
+    """
+    if isinstance(result, str):
+        # Check if it's JSON
+        try:
+            parsed = json.loads(result)
+            print(json.dumps(parsed, indent=2))
+        except (json.JSONDecodeError, TypeError):
+            # It's markdown or plain text
+            print(result)
+    elif isinstance(result, (dict, list)):
+        # Already a Python object
+        print(json.dumps(result, indent=2))
+    else:
+        # Other types
+        print(result)
+
+
+def normalize_command(cmd: str) -> str:
+    """
+    Normalize command to full form, supporting abbreviations.
+    
+    Args:
+        cmd: Command string (may be abbreviated)
+        
+    Returns:
+        Normalized command string
+    """
+    cmd_lower = cmd.lower()
+    
+    # Command abbreviations
+    abbreviations = {
+        'e': 'execute',
+        'exec': 'execute',
+        't': 'tools',
+        'm': 'metrics',
+        'c': 'clear-cache',
+        'cc': 'clear-cache',
+        'h': 'help',
+        'q': 'quit',
+        'x': 'exit'
+    }
+    
+    return abbreviations.get(cmd_lower, cmd_lower)
 
 
 async def interactive_mode(enable_tools: bool = True, config_path: str = None):
@@ -54,14 +106,14 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
     else:
         print("\nMCP tools disabled")
     
-    print("\nCommands:")
+    print("\nCommands (abbreviations in parentheses):")
     print("  query <text>     - Ask a question")
-    print("  tools            - List available tools")
-    print("  execute <tool>   - Execute a tool directly")
-    print("  metrics          - Show MCP metrics")
-    print("  clear-cache      - Clear tool result cache")
-    print("  help             - Show this help")
-    print("  exit/quit        - Exit the program")
+    print("  tools (t)        - List available tools")
+    print("  execute <tool> (e, exec) - Execute a tool directly")
+    print("  metrics (m)      - Show MCP metrics")
+    print("  clear-cache (c, cc) - Clear tool result cache")
+    print("  help (h)         - Show this help")
+    print("  exit/quit (x, q) - Exit the program")
     print()
     
     try:
@@ -72,21 +124,29 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
                 if not user_input:
                     continue
                 
-                if user_input.lower() in ["exit", "quit"]:
+                # Parse command and arguments
+                parts = user_input.split(maxsplit=1)
+                command = normalize_command(parts[0]) if parts else ""
+                args = parts[1] if len(parts) > 1 else ""
+                
+                # Handle exit commands
+                if command in ["exit", "quit"]:
                     break
                 
-                if user_input.lower() == "help":
-                    print("\nCommands:")
+                # Handle help command
+                if command == "help":
+                    print("\nCommands (abbreviations in parentheses):")
                     print("  query <text>     - Ask a question")
-                    print("  tools            - List available tools")
-                    print("  execute <tool>   - Execute a tool directly")
-                    print("  metrics          - Show MCP metrics")
-                    print("  clear-cache      - Clear tool result cache")
-                    print("  help             - Show this help")
-                    print("  exit/quit        - Exit the program")
+                    print("  tools (t)        - List available tools")
+                    print("  execute <tool> (e, exec) - Execute a tool directly")
+                    print("  metrics (m)      - Show MCP metrics")
+                    print("  clear-cache (c, cc) - Clear tool result cache")
+                    print("  help (h)         - Show this help")
+                    print("  exit/quit (x, q) - Exit the program")
                     continue
                 
-                if user_input.lower() == "tools":
+                # Handle tools command
+                if command == "tools":
                     if mcp_agent:
                         tools = mcp_agent.get_available_tools()
                         if tools:
@@ -101,7 +161,8 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
                         print("\nMCP tools not enabled")
                     continue
                 
-                if user_input.lower() == "metrics":
+                # Handle metrics command
+                if command == "metrics":
                     if mcp_agent:
                         metrics = mcp_agent.get_metrics()
                         print("\nMCP Metrics:")
@@ -116,7 +177,8 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
                         print("\nMCP tools not enabled")
                     continue
                 
-                if user_input.lower() == "clear-cache":
+                # Handle clear-cache command
+                if command == "clear-cache":
                     if mcp_agent:
                         mcp_agent.clear_cache()
                         print("\n✓ Tool cache cleared")
@@ -124,12 +186,13 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
                         print("\nMCP tools not enabled")
                     continue
                 
-                if user_input.lower().startswith("execute "):
+                # Handle execute command
+                if command == "execute":
                     if not mcp_agent:
                         print("\nMCP tools not enabled")
                         continue
                     
-                    tool_name = user_input[8:].strip()
+                    tool_name = args.strip()
                     tool = mcp_agent.get_tool(tool_name)
                     
                     if not tool:
@@ -177,14 +240,15 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
                             print(f"\nExecuting {tool_name}...")
                             result = await mcp_agent.execute_tool(tool_name, arguments)
                             print(f"\n✓ Result:")
-                            print(result)
+                            pretty_print_result(result)
                         except MCPError as e:
                             print(f"\n✗ Tool execution failed: {e}")
                     
                     continue
                 
-                if user_input.lower().startswith("query "):
-                    query = user_input[6:].strip()
+                # Handle query command
+                if command == "query":
+                    query = args.strip()
                     
                     if not query:
                         print("\n✗ Please provide a query")
