@@ -374,7 +374,7 @@ class AgentInteractiveSession:
             table.add_row(
                 tool.name,
                 tool.description or "No description",
-                tool.server_name
+                tool.server  # Fixed: use 'server' not 'server_name'
             )
         
         self.console.print(table)
