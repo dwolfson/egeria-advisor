@@ -22,22 +22,62 @@ from advisor.mcp_agent import initialize_mcp_agent, shutdown_mcp_agent, MCPError
 
 def pretty_print_result(result):
     """
-    Pretty print tool result - handles both JSON and Markdown.
+    Pretty print tool result - handles MCP content format, JSON, and Markdown.
+    
+    MCP returns content as a list of content items:
+    [{"type": "text", "text": "..."}, ...]
     
     Args:
-        result: Tool execution result
+        result: Tool execution result (MCP content array or other format)
     """
-    if isinstance(result, str):
-        # Check if it's JSON
+    # Handle MCP content array format
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict):
+                content_type = item.get("type", "")
+                
+                if content_type == "text":
+                    # Text content - could be JSON, Markdown, or plain text
+                    text = item.get("text", "")
+                    try:
+                        # Try to parse as JSON
+                        parsed = json.loads(text)
+                        print(json.dumps(parsed, indent=2))
+                    except (json.JSONDecodeError, TypeError):
+                        # It's markdown or plain text
+                        print(text)
+                
+                elif content_type == "image":
+                    # Image content
+                    print(f"[Image: {item.get('mimeType', 'unknown')}]")
+                    if "data" in item:
+                        print(f"  Data length: {len(item['data'])} bytes")
+                
+                elif content_type == "resource":
+                    # Resource reference
+                    print(f"[Resource: {item.get('uri', 'unknown')}]")
+                    if "text" in item:
+                        print(item["text"])
+                
+                else:
+                    # Unknown content type, print as JSON
+                    print(json.dumps(item, indent=2))
+            else:
+                # List item is not a dict
+                print(item)
+    
+    # Handle direct string
+    elif isinstance(result, str):
         try:
             parsed = json.loads(result)
             print(json.dumps(parsed, indent=2))
         except (json.JSONDecodeError, TypeError):
-            # It's markdown or plain text
             print(result)
-    elif isinstance(result, (dict, list)):
-        # Already a Python object
+    
+    # Handle dict or other objects
+    elif isinstance(result, dict):
         print(json.dumps(result, indent=2))
+    
     else:
         # Other types
         print(result)
