@@ -82,12 +82,44 @@ class CollectionRouter:
         Returns:
             List of matching collection names, ordered by priority
         """
-        matches: List[Tuple[str, int, int]] = []  # (name, priority, match_count)
+        matches: List[Tuple[str, int, int, float]] = []  # (name, priority, match_count, intent_boost)
+        
+        # Detect query intent for boosting
+        intent_keywords = {
+            "documentation": ["documentation", "docs", "guide", "tutorial", "manual", "reference"],
+            "code": ["code", "implementation", "source", "class", "function", "method"],
+            "example": ["example", "sample", "demo", "notebook", "workspace"],
+            "cli": ["cli", "command", "terminal", "hey-egeria", "hey_egeria"],
+        }
+        
+        detected_intent = None
+        for intent, keywords in intent_keywords.items():
+            if any(kw in query_lower for kw in keywords):
+                detected_intent = intent
+                break
         
         for collection in self.collections:
             match_count = 0
+            intent_boost = 0.0
             
-            # Check if collection matches query
+            # Check for explicit collection name mention (highest priority)
+            # Use word boundaries to avoid substring matches (e.g., "pyegeria" shouldn't match "pyegeria_drE")
+            collection_name_variants = [
+                collection.name.lower(),
+                collection.name.lower().replace("_", " "),
+                collection.name.lower().replace("_", "-"),
+            ]
+            for variant in collection_name_variants:
+                # Check if variant appears as a complete word/phrase
+                import re
+                # Create pattern that matches the variant with word boundaries
+                pattern = r'\b' + re.escape(variant) + r'\b'
+                if re.search(pattern, query_lower):
+                    match_count += 10  # Very high match count for explicit collection name
+                    intent_boost = 15.0  # Maximum boost
+                    break
+            
+            # Check if collection matches query via domain terms
             for domain_term in collection.domain_terms:
                 term_lower = domain_term.lower()
                 
@@ -99,13 +131,24 @@ class CollectionRouter:
                 if term_lower in [t.lower() for t in query_terms]:
                     match_count += 1
             
+            # Apply intent-based boosting (only if not already boosted by collection name)
+            if intent_boost == 0.0:
+                if detected_intent == "documentation" and collection.content_type.value == "documentation":
+                    intent_boost = 10.0  # Strong boost for docs when "documentation" mentioned
+                elif detected_intent == "example" and collection.content_type.value == "examples":
+                    intent_boost = 8.0
+                elif detected_intent == "cli" and "cli" in collection.name:
+                    intent_boost = 8.0
+                elif detected_intent == "code" and collection.content_type.value == "code":
+                    intent_boost = 3.0  # Moderate boost for code
+            
             if match_count > 0:
-                matches.append((collection.name, collection.priority, match_count))
+                matches.append((collection.name, collection.priority, match_count, intent_boost))
         
-        # Sort by match count (desc), then priority (desc)
-        matches.sort(key=lambda x: (x[2], x[1]), reverse=True)
+        # Sort by: intent_boost (desc), match_count (desc), priority (desc)
+        matches.sort(key=lambda x: (x[3], x[2], x[1]), reverse=True)
         
-        return [name for name, _, _ in matches]
+        return [name for name, _, _, _ in matches]
     
     def _get_default_collections(self) -> List[str]:
         """

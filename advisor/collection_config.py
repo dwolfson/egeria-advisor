@@ -84,7 +84,8 @@ PYEGERIA_COLLECTION = CollectionMetadata(
     language=Language.PYTHON,
     domain_terms=[
         "pyegeria", "python-client", "rest-client", "async-client",
-        "widget", "egeria-client", "python-api", "python-sdk"
+        "widget", "egeria-client", "python-api", "python-sdk",
+        "py-egeria"  # Add hyphenated variant
     ],
     related_collections=["pyegeria_cli", "pyegeria_drE", "egeria_docs"],
     include_patterns=["*.py", "*.md"],
@@ -117,8 +118,10 @@ PYEGERIA_DRE_COLLECTION = CollectionMetadata(
     content_type=ContentType.CODE,
     language=Language.PYTHON,
     domain_terms=[
-        "dr-egeria", "dr_egeria", "markdown", "document-automation",
-        "markdown-translator", "dre"
+        "dr-egeria", "dr_egeria", "dr egeria", "dr. egeria",  # Add space and period variants
+        "pyegeria dre", "pyegeria-dre", "pyegeria_dre",  # Collection name variants
+        "markdown", "document-automation",
+        "markdown-translator", "dre", "markdown-to-pyegeria"
     ],
     related_collections=["pyegeria", "egeria_docs"],
     include_patterns=["*.py", "*.md"],
@@ -135,10 +138,10 @@ EGERIA_JAVA_COLLECTION = CollectionMetadata(
     content_type=ContentType.CODE,
     language=Language.JAVA,
     domain_terms=[
-        "java", "omas", "omag", "omrs", "ocf", "oif",
+        "java", "java-code", "java-implementation",  # More specific Java terms
         "access-service", "view-service", "integration-service",
         "governance-server", "metadata-server", "repository-proxy",
-        "egeria-core", "egeria-server"
+        "egeria-core", "egeria-server", "spring-boot"
     ],
     related_collections=["egeria_docs", "egeria_workspaces"],
     include_patterns=["*.java", "*.md"],
@@ -156,7 +159,11 @@ EGERIA_DOCS_COLLECTION = CollectionMetadata(
     language=Language.MARKDOWN,
     domain_terms=[
         "documentation", "guide", "tutorial", "concept",
-        "reference", "docs", "manual", "walkthrough"
+        "reference", "docs", "manual", "walkthrough",
+        "egeria-docs", "egeria-documentation",  # Add specific collection identifiers
+        # Add common Egeria concepts that should route to docs
+        "omas", "omag", "omrs", "ocf", "oif",  # Architecture terms
+        "architecture", "design", "overview"
     ],
     related_collections=["pyegeria", "egeria_java", "egeria_workspaces"],
     include_patterns=["*.md", "*.rst"],

@@ -15,6 +15,8 @@ from advisor.mlflow_tracking import get_mlflow_tracker
 from advisor.analytics import get_analytics_manager
 from advisor.relationships import get_relationship_query_handler
 from advisor.config import get_full_config
+from advisor.prompt_templates import get_prompt_manager
+from advisor.query_patterns import QueryType
 
 
 class RAGSystem:
@@ -158,19 +160,38 @@ class RAGSystem:
             sources = []
         retrieval_time = time.time() - retrieval_start
 
-        # Build prompt
-        prompt = self._build_prompt(
+        # Get collections that were searched (from retrieval metadata)
+        collections_searched = []
+        if hasattr(self.retriever, 'multi_store') and self.retriever.multi_store:
+            # Try to get from last search (this is a simplification)
+            collections_searched = getattr(self.retriever, '_last_collections_searched', [])
+        
+        # Build prompt using template manager
+        prompt_manager = get_prompt_manager()
+        
+        # Convert query_type string to QueryType enum if needed
+        if isinstance(query_analysis["query_type"], str):
+            query_type_enum = QueryType(query_analysis["query_type"])
+        else:
+            query_type_enum = query_analysis["query_type"]
+        
+        prompt = prompt_manager.build_prompt(
             user_query=user_query,
             context=context,
-            query_type=query_analysis["query_type"],
-            offer_examples=offer_examples  # NEW: Include follow-up suggestion
+            query_type=query_type_enum,
+            collections_searched=collections_searched,
+            offer_examples=offer_examples
         )
+        
+        # Get appropriate system prompt based on collections
+        primary_collection = collections_searched[0] if collections_searched else None
+        system_prompt = prompt_manager.get_system_prompt(primary_collection=primary_collection)
 
         # Generate response with timing
         generation_start = time.time()
         response = self.llm_client.generate(
             prompt=prompt,
-            system=self._get_system_prompt(),
+            system=system_prompt,
             temperature=self.rag_config.generation.temperature,
             max_tokens=self.rag_config.generation.max_tokens
         )
