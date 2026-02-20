@@ -1,0 +1,629 @@
+# MCP Integration Guide
+
+**Version:** 1.0  
+**Date:** 2026-02-20  
+**Status:** Phase 10.1 Complete
+
+## Overview
+
+The Egeria Advisor now supports Model Context Protocol (MCP) integration, enabling it to invoke tools from MCP servers like the pyegeria MCP server for reports and Dr. Egeria markdown command construction/invocation.
+
+## What is MCP?
+
+Model Context Protocol (MCP) is a standardized protocol for connecting AI applications to external tools and data sources. It allows the Egeria Advisor to:
+
+- **Invoke Tools**: Execute operations like generating reports or running commands
+- **Access Resources**: Read data from external systems
+- **Extend Capabilities**: Add new functionality without modifying core code
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Egeria Advisor                            │
+│                                                              │
+│  ┌────────────────┐      ┌──────────────────┐              │
+│  │  RAG System    │      │   MCP Agent      │              │
+│  │                │      │                  │              │
+│  │  - Query       │◄────►│  - Tool Discovery│              │
+│  │  - Routing     │      │  - Tool Invocation│             │
+│  │  - Response    │      │  - Result Handling│             │
+│  └────────────────┘      └──────────────────┘              │
+│         │                         │                         │
+│         │                         │                         │
+│         ▼                         ▼                         │
+│  ┌────────────────────────────────────────┐                │
+│  │         LLM Client                      │                │
+│  │  - Prompt Construction                  │                │
+│  │  - Tool Call Detection                  │                │
+│  │  - Response Generation                  │                │
+│  └────────────────────────────────────────┘                │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          │ MCP Protocol (JSON-RPC)
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  MCP Servers                                 │
+│                                                              │
+│  ┌──────────────────┐      ┌──────────────────┐            │
+│  │  pyegeria MCP    │      │  Future MCP      │            │
+│  │                  │      │  Servers         │            │
+│  │  - Reports       │      │                  │            │
+│  │  - Dr. Egeria    │      │  - File System   │            │
+│  │  - Commands      │      │  - Database      │            │
+│  └──────────────────┘      └──────────────────┘            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Setup
+
+### 1. Configuration File
+
+Create `config/mcp_servers.json` from the example:
+
+```bash
+cp config/mcp_servers.json.example config/mcp_servers.json
+```
+
+Edit the configuration to match your environment:
+
+```json
+{
+  "mcpServers": {
+    "pyegeria": {
+      "command": "/path/to/python",
+      "args": [
+        "/path/to/pyegeria/core/mcp_server.py"
+      ],
+      "env": {
+        "EGERIA_USER": "your_user",
+        "EGERIA_VIEW_SERVER": "your_server",
+        "EGERIA_PASSWORD": "your_password",
+        "EGERIA_VIEW_SERVER_URL": "https://your-server:9443"
+      },
+      "enabled": true,
+      "description": "PyEgeria MCP server for reports and Dr. Egeria commands"
+    }
+  },
+  "settings": {
+    "auto_discover_tools": true,
+    "tool_timeout": 30,
+    "max_concurrent_tools": 5,
+    "enable_tool_caching": true,
+    "cache_ttl": 300
+  }
+}
+```
+
+### 2. Environment Variables
+
+For security, you can use environment variables instead of hardcoding credentials:
+
+```bash
+export EGERIA_USER="erinoverview"
+export EGERIA_PASSWORD="secret"
+export EGERIA_VIEW_SERVER_URL="https://localhost:9443"
+```
+
+Then in your config:
+
+```json
+{
+  "mcpServers": {
+    "pyegeria": {
+      "command": "/path/to/python",
+      "args": ["/path/to/pyegeria/core/mcp_server.py"],
+      "env": {},
+      "enabled": true
+    }
+  }
+}
+```
+
+The MCP agent will automatically use environment variables as fallback.
+
+## Usage
+
+### Interactive CLI
+
+The simplest way to use MCP tools is through the interactive CLI:
+
+```bash
+# With MCP tools enabled (default)
+python examples/cli_with_mcp.py
+
+# With custom config
+python examples/cli_with_mcp.py --config /path/to/config.json
+
+# Without MCP tools
+python examples/cli_with_mcp.py --no-tools
+```
+
+**CLI Commands:**
+
+```
+>>> tools                    # List available tools
+>>> execute <tool_name>      # Execute a tool interactively
+>>> metrics                  # Show MCP metrics
+>>> clear-cache              # Clear tool result cache
+>>> query <text>             # Ask a question (Phase 10.2)
+>>> help                     # Show help
+>>> exit                     # Exit
+```
+
+### Python API
+
+#### Basic Usage
+
+```python
+import asyncio
+from advisor.mcp_agent import initialize_mcp_agent, shutdown_mcp_agent
+
+async def main():
+    # Initialize MCP agent
+    agent = await initialize_mcp_agent()
+    
+    try:
+        # List available tools
+        tools = agent.get_available_tools()
+        for tool in tools:
+            print(f"{tool.name}: {tool.description}")
+        
+        # Execute a tool
+        result = await agent.execute_tool(
+            "generate_egeria_report",
+            {
+                "report_type": "asset",
+                "guid": "xyz-123"
+            }
+        )
+        print(f"Result: {result}")
+        
+    finally:
+        # Shutdown
+        await shutdown_mcp_agent()
+
+asyncio.run(main())
+```
+
+#### Advanced Usage
+
+```python
+from advisor.mcp_agent import MCPAgent, MCPConfig, MCPServerConfig
+
+# Create custom configuration
+config = MCPConfig(
+    servers={
+        "pyegeria": MCPServerConfig(
+            command="/path/to/python",
+            args=["/path/to/mcp_server.py"],
+            env={"EGERIA_USER": "user"},
+            enabled=True
+        )
+    },
+    tool_timeout=60,
+    enable_tool_caching=True
+)
+
+# Create agent with custom config
+agent = MCPAgent(config=config)
+await agent.initialize()
+
+# Execute multiple tools in parallel
+results = await agent.execute_tools_parallel([
+    {"name": "tool1", "arguments": {"arg": "value1"}},
+    {"name": "tool2", "arguments": {"arg": "value2"}}
+])
+
+# Get metrics
+metrics = agent.get_metrics()
+print(f"Success rate: {metrics['success_rate']:.1%}")
+
+await agent.shutdown()
+```
+
+## Tool Discovery
+
+When the MCP agent initializes, it automatically discovers available tools from all enabled servers:
+
+```python
+agent = await initialize_mcp_agent()
+
+# Get all tools
+tools = agent.get_available_tools()
+
+# Get specific tool
+tool = agent.get_tool("generate_egeria_report")
+
+# Get tool descriptions for LLM
+tool_descriptions = agent.get_tool_descriptions()
+```
+
+## Tool Execution
+
+### Direct Execution
+
+```python
+# Execute with default timeout (30s)
+result = await agent.execute_tool(
+    "generate_egeria_report",
+    {"report_type": "asset", "guid": "xyz-123"}
+)
+
+# Execute with custom timeout
+result = await agent.execute_tool(
+    "long_running_tool",
+    {"param": "value"},
+    timeout=120
+)
+
+# Execute without cache
+result = await agent.execute_tool(
+    "tool_name",
+    {"param": "value"},
+    use_cache=False
+)
+```
+
+### Parallel Execution
+
+```python
+# Execute multiple tools concurrently
+results = await agent.execute_tools_parallel([
+    {
+        "name": "generate_report",
+        "arguments": {"type": "asset", "guid": "123"}
+    },
+    {
+        "name": "get_lineage",
+        "arguments": {"guid": "456"}
+    }
+])
+
+# Results are returned in the same order
+# Exceptions are returned as exception objects
+for i, result in enumerate(results):
+    if isinstance(result, Exception):
+        print(f"Tool {i} failed: {result}")
+    else:
+        print(f"Tool {i} result: {result}")
+```
+
+## Caching
+
+Tool results are automatically cached to improve performance:
+
+```python
+# First call - executes tool
+result1 = await agent.execute_tool("tool", {"arg": "value"})
+
+# Second call - returns cached result (within TTL)
+result2 = await agent.execute_tool("tool", {"arg": "value"})
+
+# Clear cache
+agent.clear_cache()
+
+# Disable cache for specific call
+result3 = await agent.execute_tool("tool", {"arg": "value"}, use_cache=False)
+```
+
+**Cache Configuration:**
+
+```json
+{
+  "settings": {
+    "enable_tool_caching": true,
+    "cache_ttl": 300  // 5 minutes
+  }
+}
+```
+
+## Error Handling
+
+```python
+from advisor.mcp_client import (
+    MCPError,
+    MCPConnectionError,
+    MCPToolNotFoundError,
+    MCPToolExecutionError,
+    MCPTimeoutError
+)
+
+try:
+    result = await agent.execute_tool("tool_name", {"arg": "value"})
+except MCPConnectionError as e:
+    print(f"Connection failed: {e}")
+except MCPToolNotFoundError as e:
+    print(f"Tool not found: {e}")
+except MCPToolExecutionError as e:
+    print(f"Execution failed: {e}")
+except MCPTimeoutError as e:
+    print(f"Timeout: {e}")
+except MCPError as e:
+    print(f"MCP error: {e}")
+```
+
+## Metrics and Monitoring
+
+Track MCP performance with built-in metrics:
+
+```python
+metrics = agent.get_metrics()
+
+print(f"Tool invocations: {metrics['tool_invocations']}")
+print(f"Successes: {metrics['tool_successes']}")
+print(f"Failures: {metrics['tool_failures']}")
+print(f"Success rate: {metrics['success_rate']:.1%}")
+print(f"Avg execution time: {metrics['average_execution_time']:.2f}s")
+print(f"Cache hits: {metrics['cache_hits']}")
+print(f"Cache misses: {metrics['cache_misses']}")
+```
+
+## Configuration Reference
+
+### Server Configuration
+
+```json
+{
+  "command": "/path/to/executable",
+  "args": ["arg1", "arg2"],
+  "env": {
+    "VAR1": "value1",
+    "VAR2": "value2"
+  },
+  "enabled": true,
+  "description": "Server description"
+}
+```
+
+- **command**: Path to the MCP server executable
+- **args**: Command-line arguments
+- **env**: Environment variables (merged with system env)
+- **enabled**: Whether to connect to this server
+- **description**: Human-readable description
+
+### Global Settings
+
+```json
+{
+  "settings": {
+    "auto_discover_tools": true,
+    "tool_timeout": 30,
+    "max_concurrent_tools": 5,
+    "enable_tool_caching": true,
+    "cache_ttl": 300
+  }
+}
+```
+
+- **auto_discover_tools**: Automatically discover tools on connect
+- **tool_timeout**: Default timeout for tool execution (seconds)
+- **max_concurrent_tools**: Maximum concurrent tool executions
+- **enable_tool_caching**: Enable result caching
+- **cache_ttl**: Cache time-to-live (seconds)
+
+## Integration with RAG System
+
+**Note:** Full RAG integration is coming in Phase 10.2.
+
+The planned integration will:
+
+1. **Analyze Query**: Determine if tools are needed
+2. **RAG Search**: Get context from vector database
+3. **Tool Selection**: LLM selects appropriate tools
+4. **Tool Execution**: Execute selected tools
+5. **Context Enhancement**: Add tool results to context
+6. **Final Response**: Generate response with tool results
+
+Example (Phase 10.2):
+
+```python
+from advisor.tool_augmented_rag import ToolAugmentedRAG
+
+rag = ToolAugmentedRAG(rag_system, mcp_agent)
+
+result = await rag.query_with_tools(
+    "Generate a report for asset xyz-123",
+    enable_tools=True
+)
+
+print(result['response'])
+print(f"Tools used: {result['tools_used']}")
+```
+
+## PyEgeria MCP Server
+
+The pyegeria MCP server provides tools for:
+
+### Current Tools (Planned)
+
+1. **generate_egeria_report**
+   - Generate reports for assets, glossaries, lineage
+   - Parameters: report_type, guid
+
+2. **execute_dr_egeria_command**
+   - Execute Dr. Egeria markdown commands
+   - Parameters: command
+
+3. **list_assets**
+   - List assets with filters
+   - Parameters: search_string, asset_type
+
+4. **get_lineage**
+   - Get lineage for an asset
+   - Parameters: guid, depth
+
+### Future Tools
+
+- create_glossary_term
+- update_asset_metadata
+- run_governance_action
+- get_classification_report
+
+## Troubleshooting
+
+### MCP Server Won't Start
+
+```
+✗ Failed to connect to MCP server pyegeria: Connection failed
+```
+
+**Solutions:**
+1. Check that the command path is correct
+2. Verify Python environment is activated
+3. Check that mcp_server.py exists
+4. Review server logs for errors
+
+### Tool Not Found
+
+```
+✗ Tool not found: generate_report
+```
+
+**Solutions:**
+1. Run `tools` command to see available tools
+2. Check tool name spelling
+3. Verify server is connected
+4. Check server logs for tool registration
+
+### Tool Execution Timeout
+
+```
+✗ Tool execution timed out after 30s
+```
+
+**Solutions:**
+1. Increase timeout in config: `"tool_timeout": 60`
+2. Check server performance
+3. Verify network connectivity
+4. Review tool implementation
+
+### Connection Errors
+
+```
+✗ MCP server pyegeria failed to start: [Errno 2] No such file or directory
+```
+
+**Solutions:**
+1. Verify command path is absolute
+2. Check file permissions
+3. Ensure Python environment is correct
+4. Test command manually
+
+## Best Practices
+
+### 1. Use Environment Variables for Credentials
+
+```bash
+export EGERIA_PASSWORD="secret"
+```
+
+Never commit credentials to version control.
+
+### 2. Enable Caching for Read-Only Operations
+
+```json
+{
+  "settings": {
+    "enable_tool_caching": true,
+    "cache_ttl": 300
+  }
+}
+```
+
+### 3. Set Appropriate Timeouts
+
+```json
+{
+  "settings": {
+    "tool_timeout": 30  // Adjust based on tool complexity
+  }
+}
+```
+
+### 4. Monitor Metrics
+
+```python
+metrics = agent.get_metrics()
+if metrics['success_rate'] < 0.9:
+    logger.warning("Low tool success rate")
+```
+
+### 5. Handle Errors Gracefully
+
+```python
+try:
+    result = await agent.execute_tool(name, args)
+except MCPError as e:
+    logger.error(f"Tool failed: {e}")
+    # Fall back to alternative approach
+```
+
+### 6. Clean Up Resources
+
+```python
+try:
+    agent = await initialize_mcp_agent()
+    # Use agent
+finally:
+    await shutdown_mcp_agent()
+```
+
+## Security Considerations
+
+### 1. Credential Management
+
+- Use environment variables for sensitive data
+- Never commit credentials to version control
+- Rotate credentials regularly
+- Use secure credential storage (e.g., keyring)
+
+### 2. Tool Execution Safety
+
+- Validate tool arguments before execution
+- Implement timeouts for all tool calls
+- Rate limit tool invocations
+- Monitor tool usage
+
+### 3. Network Security
+
+- Use HTTPS for Egeria connections
+- Verify SSL certificates
+- Use VPN for remote connections
+- Implement network segmentation
+
+## Next Steps
+
+### Phase 10.2: RAG Integration (Planned)
+
+- Implement ToolAugmentedRAG class
+- Add query analysis for tool selection
+- Integrate with LLM client for function calling
+- Add tool result formatting
+
+### Phase 10.3: CLI Enhancements (Planned)
+
+- Add tool execution to main CLI
+- Implement tool result visualization
+- Add tool usage history
+- Create tool execution examples
+
+### Phase 10.4: Testing & Documentation (Planned)
+
+- Create mock MCP server for testing
+- Write comprehensive tests
+- Add more usage examples
+- Create video tutorials
+
+## References
+
+- **MCP Protocol**: https://modelcontextprotocol.io/
+- **Phase 10 Design**: PHASE10_MCP_INTEGRATION.md
+- **PyEgeria**: https://github.com/odpi/egeria-python
+- **OpenAI Function Calling**: https://platform.openai.com/docs/guides/function-calling
+
+---
+
+**Status:** Phase 10.1 Complete  
+**Next Phase:** 10.2 - RAG Integration  
+**Last Updated:** 2026-02-20

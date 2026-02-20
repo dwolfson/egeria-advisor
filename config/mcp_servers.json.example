@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "pyegeria": {
+      "command": "/Users/dwolfson/localGit/egeria-python/.venv/bin/python",
+      "args": [
+        "/Users/dwolfson/localGit/egeria-python/pyegeria/core/mcp_server.py"
+      ],
+      "env": {
+        "EGERIA_USER": "erinoverview",
+        "EGERIA_VIEW_SERVER": "qs-view-server",
+        "EGERIA_PASSWORD": "secret",
+        "EGERIA_VIEW_SERVER_URL": "https://localhost:9443"
+      },
+      "enabled": true,
+      "description": "PyEgeria MCP server for reports and Dr. Egeria commands"
+    }
+  },
+  "settings": {
+    "auto_discover_tools": true,
+    "tool_timeout": 30,
+    "max_concurrent_tools": 5,
+    "enable_tool_caching": true,
+    "cache_ttl": 300
+  }
+}
