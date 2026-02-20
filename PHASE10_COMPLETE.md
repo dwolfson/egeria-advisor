@@ -1,8 +1,8 @@
 # Phase 10: MCP Integration - Complete
 
-**Version:** 1.0  
-**Date:** 2026-02-20  
-**Status:** ✅ Complete
+**Version:** 1.1
+**Date:** 2026-02-20
+**Status:** ✅ Phase 10.1 & 10.2 Complete
 
 ## Overview
 
@@ -16,7 +16,7 @@ Successfully implemented Model Context Protocol (MCP) integration for the Egeria
 - `advisor/mcp_client.py` (450 lines) - MCP client for server communication
 - `advisor/mcp_agent.py` (450 lines) - Multi-server management
 - `config/mcp_servers.json.example` - Configuration template
-- `examples/cli_with_mcp.py` (265 lines) - Interactive CLI
+- `examples/cli_with_mcp.py` (379 lines) - Interactive CLI with tool execution
 - `PHASE10_MCP_INTEGRATION.md` (750 lines) - Technical design
 - `MCP_INTEGRATION_GUIDE.md` (650 lines) - User guide
 
@@ -28,7 +28,10 @@ Successfully implemented Model Context Protocol (MCP) integration for the Egeria
 - Comprehensive error handling (MCPError hierarchy)
 - Metrics tracking (success rate, execution time, cache performance)
 - Environment variable support for credentials
-- Interactive CLI for tool exploration
+- Interactive CLI for tool exploration and execution
+- Command abbreviations (e/exec, t/tools, m/metrics, etc.)
+- Pretty printing for MCP content format (text, image, resource)
+- Enhanced parameter input showing enum values when available
 
 ### Phase 10.2: RAG Integration ✅
 
@@ -44,6 +47,15 @@ Successfully implemented Model Context Protocol (MCP) integration for the Egeria
 - Context enhancement with tool results
 - Graceful fallback to regular RAG on errors
 - Support for OpenAI function calling format
+
+### Current Limitations
+
+**Agent CLI Integration (Phase 10.3 - Pending):**
+- The main agent CLI (`egeria-advisor --agent --interactive`) does NOT yet have MCP tool execution
+- MCP tools are currently available only in example CLIs:
+  - `examples/cli_with_mcp.py` - Standalone tool execution
+  - `examples/cli_with_tools_and_rag.py` - Tool-augmented RAG queries
+- Future Phase 10.3 will integrate MCP tools into the production agent CLI
 
 ## Architecture
 
@@ -195,6 +207,64 @@ export EGERIA_USER="erinoverview"
 export EGERIA_PASSWORD="secret"
 export EGERIA_VIEW_SERVER_URL="https://localhost:9443"
 ```
+
+## Security Best Practices
+
+### Critical Security Requirements ⚠️
+
+1. **Credential Management**
+   - ✅ Use environment variables for ALL credentials
+   - ✅ Never commit `config/mcp_servers.json` to git
+   - ✅ Add to `.gitignore`: `config/mcp_servers.json`
+   - ✅ Rotate credentials every 90 days
+   - ✅ Use different credentials for dev/test/prod
+
+2. **Network Security**
+   - ✅ Always use HTTPS for Egeria connections
+   - ✅ Verify SSL certificates
+   - ✅ Use VPN for remote connections
+   - ✅ Implement network segmentation
+
+3. **Tool Execution Safety**
+   - ✅ Validate all tool arguments
+   - ✅ Implement timeouts (default 30s)
+   - ✅ Rate limit tool invocations
+   - ✅ Monitor tool usage and failures
+
+4. **Process Isolation**
+   - ✅ Run MCP servers with limited privileges
+   - ✅ Set resource limits (CPU, memory)
+   - ✅ Use minimal environment variables
+   - ✅ Isolate server processes
+
+5. **Audit Logging**
+   - ✅ Log all tool invocations
+   - ✅ Include user, timestamp, tool, arguments
+   - ✅ Monitor for anomalies
+   - ✅ Set up security alerts
+
+6. **Error Handling**
+   - ✅ Sanitize error messages
+   - ✅ Never expose credentials in logs
+   - ✅ Implement graceful degradation
+   - ✅ Have incident response plan
+
+### Security Checklist
+
+Before deploying MCP integration:
+
+- [ ] All credentials in environment variables
+- [ ] `config/mcp_servers.json` in `.gitignore`
+- [ ] HTTPS enabled for Egeria
+- [ ] SSL certificate verification enabled
+- [ ] Tool timeouts configured
+- [ ] Rate limiting implemented
+- [ ] Audit logging enabled
+- [ ] Error messages sanitized
+- [ ] Resource limits set
+- [ ] Network segmentation configured
+- [ ] Security monitoring configured
+- [ ] Incident response plan documented
 
 ## Usage Examples
 

@@ -1,12 +1,29 @@
 # MCP Integration Guide
 
-**Version:** 1.0  
-**Date:** 2026-02-20  
-**Status:** Phase 10.1 Complete
+**Version:** 1.1
+**Date:** 2026-02-20
+**Status:** Phase 10.1 & 10.2 Complete
 
 ## Overview
 
 The Egeria Advisor now supports Model Context Protocol (MCP) integration, enabling it to invoke tools from MCP servers like the pyegeria MCP server for reports and Dr. Egeria markdown command construction/invocation.
+
+## Current Status
+
+✅ **Phase 10.1 Complete**: Core MCP implementation with standalone CLI
+✅ **Phase 10.2 Complete**: RAG integration with tool-augmented queries
+⏳ **Phase 10.3 Pending**: Integration into main agent CLI
+
+**Available Now:**
+- `examples/cli_with_mcp.py` - Interactive tool execution CLI
+- `examples/cli_with_tools_and_rag.py` - Tool-augmented RAG queries
+- `advisor/mcp_client.py` - MCP client library
+- `advisor/mcp_agent.py` - Multi-server agent
+- `advisor/tool_augmented_rag.py` - RAG with tool invocation
+
+**Not Yet Available:**
+- MCP tool execution in main agent CLI (`egeria-advisor --agent --interactive`)
+- This will be added in Phase 10.3
 
 ## What is MCP?
 
@@ -404,31 +421,55 @@ print(f"Cache misses: {metrics['cache_misses']}")
 
 ## Integration with RAG System
 
-**Note:** Full RAG integration is coming in Phase 10.2.
+**Status:** ✅ Complete (Phase 10.2)
 
-The planned integration will:
+The RAG integration enables automatic tool invocation based on query analysis:
 
-1. **Analyze Query**: Determine if tools are needed
+1. **Analyze Query**: Determine if tools are needed based on keywords
 2. **RAG Search**: Get context from vector database
-3. **Tool Selection**: LLM selects appropriate tools
-4. **Tool Execution**: Execute selected tools
+3. **Tool Selection**: LLM selects appropriate tools from available tools
+4. **Tool Execution**: Execute selected tools via MCP agent
 5. **Context Enhancement**: Add tool results to context
 6. **Final Response**: Generate response with tool results
 
-Example (Phase 10.2):
+### Usage Example
 
 ```python
-from advisor.tool_augmented_rag import ToolAugmentedRAG
+from advisor.tool_augmented_rag import get_tool_augmented_rag
 
-rag = ToolAugmentedRAG(rag_system, mcp_agent)
+# Initialize tool-augmented RAG
+tool_rag = await get_tool_augmented_rag()
 
-result = await rag.query_with_tools(
+# Query with automatic tool invocation
+result = await tool_rag.query_with_tools(
     "Generate a report for asset xyz-123",
     enable_tools=True
 )
 
 print(result['response'])
 print(f"Tools used: {result['tools_used']}")
+print(f"Tool results: {result['tool_results']}")
+```
+
+### Query Analysis
+
+The system automatically detects when tools are needed based on:
+- **Keywords**: "report", "generate", "create", "run", "execute", "invoke"
+- **Query Type**: Imperative commands vs. informational questions
+- **Context**: Previous conversation history
+
+### Tool Invocation Flow
+
+```
+User Query → Query Analysis → RAG Search → LLM with Tools
+                                              ↓
+                                         Tool Calls?
+                                              ↓
+                                    Execute via MCP Agent
+                                              ↓
+                                    Add Results to Context
+                                              ↓
+                                    Generate Final Response
 ```
 
 ## PyEgeria MCP Server
@@ -571,49 +612,275 @@ finally:
 
 ## Security Considerations
 
-### 1. Credential Management
+### 1. Credential Management ⚠️
 
-- Use environment variables for sensitive data
-- Never commit credentials to version control
-- Rotate credentials regularly
-- Use secure credential storage (e.g., keyring)
+**Critical Security Practices:**
 
-### 2. Tool Execution Safety
+```bash
+# ✅ GOOD: Use environment variables
+export EGERIA_PASSWORD="secret"
+export EGERIA_USER="admin"
 
-- Validate tool arguments before execution
-- Implement timeouts for all tool calls
-- Rate limit tool invocations
-- Monitor tool usage
+# ❌ BAD: Never hardcode in config files
+{
+  "env": {
+    "EGERIA_PASSWORD": "secret"  // DON'T DO THIS
+  }
+}
+```
 
-### 3. Network Security
+**Best Practices:**
+- ✅ Use environment variables for ALL sensitive data
+- ✅ Never commit credentials to version control
+- ✅ Add `config/mcp_servers.json` to `.gitignore`
+- ✅ Rotate credentials regularly (every 90 days)
+- ✅ Use secure credential storage (e.g., system keyring, HashiCorp Vault)
+- ✅ Use different credentials for dev/test/prod environments
+- ✅ Implement credential expiration policies
+- ✅ Audit credential access and usage
 
-- Use HTTPS for Egeria connections
-- Verify SSL certificates
-- Use VPN for remote connections
-- Implement network segmentation
+**Example Secure Configuration:**
+
+```json
+{
+  "mcpServers": {
+    "pyegeria": {
+      "command": "/path/to/python",
+      "args": ["/path/to/mcp_server.py"],
+      "env": {
+        "EGERIA_USER": "${EGERIA_USER}",
+        "EGERIA_PASSWORD": "${EGERIA_PASSWORD}",
+        "EGERIA_VIEW_SERVER_URL": "${EGERIA_VIEW_SERVER_URL}"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+### 2. Tool Execution Safety 🛡️
+
+**Input Validation:**
+```python
+# Validate tool arguments before execution
+def validate_tool_args(tool_name: str, arguments: dict) -> bool:
+    """Validate tool arguments against schema."""
+    tool = agent.get_tool(tool_name)
+    if not tool:
+        raise ValueError(f"Unknown tool: {tool_name}")
+    
+    # Validate required parameters
+    required = tool.input_schema.get("required", [])
+    for param in required:
+        if param not in arguments:
+            raise ValueError(f"Missing required parameter: {param}")
+    
+    return True
+```
+
+**Timeout Protection:**
+```python
+# Always use timeouts to prevent hanging
+result = await agent.execute_tool(
+    "long_running_tool",
+    arguments,
+    timeout=30  # Fail after 30 seconds
+)
+```
+
+**Rate Limiting:**
+```python
+# Implement rate limiting for tool invocations
+from datetime import datetime, timedelta
+
+class RateLimiter:
+    def __init__(self, max_calls: int, window: timedelta):
+        self.max_calls = max_calls
+        self.window = window
+        self.calls = []
+    
+    def check_limit(self) -> bool:
+        now = datetime.now()
+        # Remove old calls outside window
+        self.calls = [t for t in self.calls if now - t < self.window]
+        
+        if len(self.calls) >= self.max_calls:
+            return False
+        
+        self.calls.append(now)
+        return True
+
+# Usage
+limiter = RateLimiter(max_calls=10, window=timedelta(minutes=1))
+if not limiter.check_limit():
+    raise Exception("Rate limit exceeded")
+```
+
+**Monitoring:**
+```python
+# Monitor tool usage for anomalies
+metrics = agent.get_metrics()
+if metrics['failed_calls'] > 10:
+    logger.warning("High tool failure rate detected")
+    # Alert security team
+```
+
+### 3. Network Security 🔒
+
+**HTTPS Configuration:**
+```python
+# Always use HTTPS for Egeria connections
+EGERIA_VIEW_SERVER_URL = "https://egeria-server:9443"  # ✅ HTTPS
+
+# Never use HTTP in production
+EGERIA_VIEW_SERVER_URL = "http://egeria-server:9080"   # ❌ HTTP
+```
+
+**SSL Certificate Verification:**
+```python
+import ssl
+import certifi
+
+# Verify SSL certificates
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+ssl_context.check_hostname = True
+ssl_context.verify_mode = ssl.CERT_REQUIRED
+```
+
+**Network Segmentation:**
+- Run MCP servers in isolated network segments
+- Use firewalls to restrict access
+- Implement VPN for remote connections
+- Use private networks for internal communication
+
+### 4. Process Isolation 🔐
+
+**Subprocess Security:**
+```python
+# Run MCP servers with limited privileges
+import subprocess
+import os
+
+# Drop privileges before starting server
+def start_mcp_server():
+    # Set resource limits
+    import resource
+    resource.setrlimit(resource.RLIMIT_CPU, (60, 60))  # 60 sec CPU
+    resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))  # 512MB RAM
+    
+    # Start with limited environment
+    env = {
+        'PATH': '/usr/bin:/bin',
+        'EGERIA_USER': os.environ['EGERIA_USER'],
+        'EGERIA_PASSWORD': os.environ['EGERIA_PASSWORD']
+    }
+    
+    subprocess.Popen(
+        ['/path/to/python', 'mcp_server.py'],
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+```
+
+### 5. Audit Logging 📝
+
+**Log All Tool Invocations:**
+```python
+import logging
+from datetime import datetime
+
+logger = logging.getLogger('mcp_audit')
+
+def audit_tool_call(user: str, tool: str, args: dict, result: str):
+    """Audit log for tool invocations."""
+    logger.info({
+        'timestamp': datetime.now().isoformat(),
+        'user': user,
+        'tool': tool,
+        'arguments': args,
+        'result': result,
+        'success': True
+    })
+```
+
+### 6. Error Handling 🚨
+
+**Never Expose Sensitive Information in Errors:**
+```python
+# ❌ BAD: Exposes credentials
+try:
+    result = await client.connect()
+except Exception as e:
+    logger.error(f"Connection failed: {e}")  # May contain password
+
+# ✅ GOOD: Sanitize error messages
+try:
+    result = await client.connect()
+except Exception as e:
+    sanitized = str(e).replace(password, '***')
+    logger.error(f"Connection failed: {sanitized}")
+```
+
+### Security Checklist
+
+Before deploying MCP integration:
+
+- [ ] All credentials stored in environment variables
+- [ ] `config/mcp_servers.json` added to `.gitignore`
+- [ ] HTTPS enabled for all Egeria connections
+- [ ] SSL certificate verification enabled
+- [ ] Tool execution timeouts configured
+- [ ] Rate limiting implemented
+- [ ] Audit logging enabled
+- [ ] Error messages sanitized
+- [ ] Resource limits set for MCP servers
+- [ ] Network segmentation configured
+- [ ] Security monitoring alerts configured
+- [ ] Incident response plan documented
 
 ## Next Steps
 
-### Phase 10.2: RAG Integration (Planned)
+### Phase 10.3: Agent CLI Integration (Planned)
 
-- Implement ToolAugmentedRAG class
-- Add query analysis for tool selection
-- Integrate with LLM client for function calling
-- Add tool result formatting
+**Goal:** Integrate MCP tools into main agent CLI
 
-### Phase 10.3: CLI Enhancements (Planned)
+**Tasks:**
+- [ ] Add MCP agent initialization to `AgentInteractiveSession`
+- [ ] Implement `/tools` command to list available tools
+- [ ] Implement `/execute <tool>` command for tool invocation
+- [ ] Add `/metrics` command for MCP metrics
+- [ ] Implement pretty printing for tool results
+- [ ] Add tool execution to query flow
+- [ ] Update agent CLI documentation
 
-- Add tool execution to main CLI
-- Implement tool result visualization
-- Add tool usage history
-- Create tool execution examples
+**Benefits:**
+- Unified CLI experience with conversational agent + tools
+- Tool execution within conversation context
+- Automatic tool invocation based on conversation
 
 ### Phase 10.4: Testing & Documentation (Planned)
 
-- Create mock MCP server for testing
-- Write comprehensive tests
-- Add more usage examples
-- Create video tutorials
+**Tasks:**
+- [ ] Create mock MCP server for testing
+- [ ] Write comprehensive unit tests
+- [ ] Add integration tests
+- [ ] Create more usage examples
+- [ ] Add troubleshooting guide
+- [ ] Create video tutorials
+- [ ] Document security best practices
+
+### Phase 10.5: Remote Server Support (Future)
+
+**Goal:** Support remote MCP servers via SSE/HTTP
+
+**Tasks:**
+- [ ] Implement SSE transport for remote servers
+- [ ] Add authentication for remote connections
+- [ ] Implement connection pooling
+- [ ] Add server health monitoring
+- [ ] Document remote server setup
 
 ## References
 
@@ -624,6 +891,35 @@ finally:
 
 ---
 
-**Status:** Phase 10.1 Complete  
-**Next Phase:** 10.2 - RAG Integration  
+**Status:** Phase 10.1 & 10.2 Complete
+**Next Phase:** 10.3 - Agent CLI Integration
 **Last Updated:** 2026-02-20
+
+## Quick Reference
+
+### Example CLIs Available Now
+
+1. **Tool Execution CLI**: `examples/cli_with_mcp.py`
+   ```bash
+   cd /path/to/egeria-advisor
+   python examples/cli_with_mcp.py
+   ```
+
+2. **Tool-Augmented RAG CLI**: `examples/cli_with_tools_and_rag.py`
+   ```bash
+   python examples/cli_with_tools_and_rag.py
+   ```
+
+### Configuration Files
+
+- **Template**: `config/mcp_servers.json.example`
+- **Your Config**: `config/mcp_servers.json` (create from template)
+- **Add to .gitignore**: `config/mcp_servers.json`
+
+### Security Reminders
+
+⚠️ **NEVER commit credentials to git**
+⚠️ **ALWAYS use environment variables**
+⚠️ **ALWAYS use HTTPS in production**
+⚠️ **ALWAYS implement timeouts**
+⚠️ **ALWAYS validate tool inputs**

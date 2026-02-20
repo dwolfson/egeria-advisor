@@ -204,3 +204,4 @@ milvus_data/
 tmp/
 temp/
 *.tmp
+config/mcp_servers.json
