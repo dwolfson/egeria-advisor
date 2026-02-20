@@ -288,12 +288,18 @@ class AgentInteractiveSession:
         help_text += "  [cyan]/verbose[/cyan]     - Toggle verbose mode\n"
         help_text += "  [cyan]/citations[/cyan]   - Toggle citation display\n"
         
+        # Always show MCP commands with availability indicator
+        help_text += "\n[bold]MCP Tools:"
         if self.mcp_agent:
-            help_text += "\n[bold]MCP Tools:[/bold]\n"
-            help_text += "  [cyan]/tools[/cyan]       - List available tools\n"
-            help_text += "  [cyan]/execute[/cyan]     - Execute a tool (aliases: /exec, /e)\n"
-            help_text += "  [cyan]/metrics[/cyan]     - Show tool metrics\n"
-            help_text += "  [cyan]/clear-cache[/cyan] - Clear tool cache (alias: /cc)\n"
+            tool_count = len(self.mcp_agent.get_available_tools())
+            help_text += f" [green]({tool_count} tools available)[/green][/bold]\n"
+        else:
+            help_text += " [yellow](unavailable)[/yellow][/bold]\n"
+        
+        help_text += "  [cyan]/tools[/cyan]       - List available MCP tools\n"
+        help_text += "  [cyan]/execute[/cyan]     - Execute a tool (aliases: /exec, /e)\n"
+        help_text += "  [cyan]/metrics[/cyan]     - Show tool execution metrics\n"
+        help_text += "  [cyan]/clear-cache[/cyan] - Clear tool result cache (alias: /cc)\n"
         
         help_text += "\n[bold]System:[/bold]\n"
         help_text += "  [cyan]/exit[/cyan]        - Exit (or Ctrl+D)\n"
@@ -307,14 +313,18 @@ class AgentInteractiveSession:
         if self.mcp_agent:
             help_text += "  • MCP tool execution for reports and commands\n"
         
-        help_text += "\n[bold cyan]Tips:[/bold cyan]\n"
-        help_text += "  • Ask follow-up questions - context is preserved\n"
-        help_text += "  • Request code examples: 'Show me how to create a glossary'\n"
+        help_text += "\n[bold cyan]Usage Examples:[/bold cyan]\n"
+        help_text += "  • Ask questions: [dim]'How do I create a glossary?'[/dim]\n"
+        help_text += "  • Request code: [dim]'Show me an example of creating a term'[/dim]\n"
         
         if self.mcp_agent:
-            help_text += "  • Execute tools: '/execute list_reports'\n"
+            help_text += "  • List tools: [dim]/tools[/dim]\n"
+            help_text += "  • Execute tool: [dim]/execute list_reports[/dim] or [dim]/e list_reports[/dim]\n"
+            help_text += "  • View metrics: [dim]/metrics[/dim]\n"
+        else:
+            help_text += "  • [dim]MCP tools require config/mcp_servers.json configuration[/dim]\n"
         
-        help_text += "  • Use arrow keys to navigate history\n"
+        help_text += "\n[dim]Use arrow keys to navigate command history[/dim]\n"
         
         self.console.print(Panel(help_text, border_style="cyan", padding=(1, 2)))
     
