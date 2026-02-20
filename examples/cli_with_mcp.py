@@ -253,11 +253,25 @@ async def interactive_mode(enable_tools: bool = True, config_path: str = None):
                     
                     for param_name, param_info in properties.items():
                         is_required = param_name in required
+                        param_type = param_info.get('type', 'string')
+                        
+                        # Build prompt with helpful information
                         prompt = f"  {param_name}"
                         if is_required:
                             prompt += " (required)"
-                        prompt += f" [{param_info.get('type', 'string')}]: "
                         
+                        # Show enum values if available
+                        if 'enum' in param_info:
+                            enum_values = param_info['enum']
+                            prompt += f" [{', '.join(map(str, enum_values))}]"
+                        else:
+                            prompt += f" [{param_type}]"
+                        
+                        # Show description if available
+                        if 'description' in param_info:
+                            print(f"    {param_info['description']}")
+                        
+                        prompt += ": "
                         value = input(prompt).strip()
                         
                         if value:
