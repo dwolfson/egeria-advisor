@@ -258,12 +258,14 @@ def start_interactive(options: dict):
             "[bold cyan]Egeria Advisor - Agent Mode[/bold cyan]\n\n"
             "Conversational AI assistant with memory and context awareness.\n\n"
             "[dim]Commands:[/dim]\n"
-            "  [cyan]/help[/cyan]     - Show help\n"
+            "  [cyan]/help[/cyan]     - Show all commands\n"
+            "  [cyan]/tools[/cyan]    - List MCP tools\n"
+            "  [cyan]/execute[/cyan]  - Execute MCP tool (alias: /e)\n"
             "  [cyan]/clear[/cyan]    - Clear conversation history\n"
             "  [cyan]/history[/cyan]  - Show conversation history\n"
             "  [cyan]/stats[/cyan]    - Show agent statistics\n"
             "  [cyan]/exit[/cyan]     - Exit (or Ctrl+D)\n\n"
-            "[dim]Type your question and press Enter[/dim]",
+            "[dim]Type your question or /help for more info[/dim]",
             border_style="cyan"
         ))
         console.print()

@@ -395,14 +395,15 @@ class AgentInteractiveSession:
             self.console.print("[yellow]MCP tools not available[/yellow]")
             return
         
-        # Parse command: /execute tool_name or /e tool_name
-        parts = command.split(maxsplit=1)
+        # Parse command: /execute tool_name [args] or /e tool_name [args]
+        parts = command.split(maxsplit=2)
         if len(parts) < 2:
-            self.console.print("[yellow]Usage: /execute <tool_name>[/yellow]")
+            self.console.print("[yellow]Usage: /execute <tool_name> [report_spec][/yellow]")
             self.console.print("[dim]Use /tools to see available tools[/dim]")
             return
         
         tool_name = parts[1].strip()
+        quick_args = parts[2].strip() if len(parts) > 2 else None
         
         # Get tool info
         tool = self.mcp_agent.get_tool(tool_name)
@@ -411,9 +412,21 @@ class AgentInteractiveSession:
             self.console.print("[dim]Use /tools to see available tools[/dim]")
             return
         
-        # Get parameters interactively
+        # Get parameters - use quick args if provided, otherwise interactive
         try:
-            arguments = self._get_tool_arguments(tool)
+            if quick_args:
+                # Quick execution with provided argument
+                # Assume first parameter is the one being provided
+                schema = tool.input_schema
+                if schema and 'properties' in schema:
+                    first_param = list(schema['properties'].keys())[0]
+                    arguments = {first_param: quick_args}
+                    self.console.print(f"[dim]Using {first_param}={quick_args}[/dim]")
+                else:
+                    arguments = {}
+            else:
+                # Interactive parameter collection
+                arguments = self._get_tool_arguments(tool)
         except KeyboardInterrupt:
             self.console.print("\n[yellow]Tool execution cancelled[/yellow]")
             return
