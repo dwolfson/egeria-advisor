@@ -1,6 +1,20 @@
 # Egeria Advisor
 
-Production-ready AI-powered advisor for the Egeria Python library using local LLMs and RAG.
+Experimental AI-powered advisor for the Egeria Python library using local LLMs and RAG.
+The goal is to provide a useful advisor for Egeria and Pyegeria users. You should be able to ask questions about the
+concepts and code, ask for examples, find definitions etc. 
+
+
+This is also a testbed for my experiments with AI, RAG, Agents, LLMs, and more. I am working to integrate
+*Context Intelligence* into the environment. There are experimental features and ideas that are not yet fully 
+cooked, integrated, or tested. I view this as a testbed for building out useful AI advisors.
+
+This is a work in progress. There are known limitations and bugs, and the system is not production-ready.
+
+The accuracy of the results is still only fair at best. I see hallucinations and errors, and I am tracking results and
+feedback to make ongoing improvements. There are many more integrations to do and updates to some of the
+newer frameworks and technologies. Its an interesting start to an ongoing experiment.
+
 
 ## Overview
 
